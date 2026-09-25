@@ -1,0 +1,186 @@
+package tui
+
+import (
+	"fmt"
+	"path/filepath"
+	"strings"
+	"unicode"
+
+	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+var (
+	plain  = lipgloss.NewStyle()
+	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#BB9AF7"))
+	mint   = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ECE6A"))
+	muted  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8993AE"))
+	danger = lipgloss.NewStyle().Foreground(lipgloss.Color("#F7768E"))
+	border = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("#414868")).Padding(0, 1)
+)
+
+// Agent output is text, never terminal control sequences (OSC links, clipboard, etc.).
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return -1
+		}
+		return r
+	}, ansi.Strip(s))
+}
+func line(s string, width int) string {
+	return ansi.Truncate(strings.ReplaceAll(clean(s), "\n", " "), max(1, width), "…")
+}
+
+func (m *model) renderTranscript(force bool) {
+	if m.client == nil || m.page == "info" {
+		return
+	}
+	s, revision := m.client.Snapshot()
+	if !force && revision == m.revision {
+		return
+	}
+	m.revision = revision
+	atBottom := m.viewport.AtBottom()
+	var out strings.Builder
+	if len(s.Messages) == 0 {
+		out.WriteString("\n" + accent.Bold(true).Render("  A small client. Room for big ideas.") + "\n\n")
+		out.WriteString(muted.Render("  Start a conversation in " + filepath.Base(m.options.Cwd) + ".\n  /help opens commands · Ctrl+S opens sessions\n\n  Your agent's tools and permissions appear here."))
+	}
+	width := max(12, m.viewport.Width()-4)
+	for i, message := range s.Messages {
+		text := clean(message.Text)
+		label := message.Role
+		style := muted
+		switch message.Role {
+		case "user":
+			label = "YOU"
+			style = accent
+		case "assistant":
+			label = "AGENT"
+			style = mint
+		case "thought":
+			label = "THINKING"
+		case "tool":
+			label = "TOOL"
+		case "plan":
+			label = "PLAN"
+		}
+		out.WriteString(style.Bold(true).Render(label) + "\n")
+		if message.Role == "assistant" {
+			cacheKey := fmt.Sprintf("%d:%d:%s", width, i, text)
+			rendered, ok := m.renderCache[cacheKey]
+			if !ok {
+				r, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(width))
+				if err == nil {
+					rendered, err = r.Render(text)
+				}
+				if err != nil {
+					rendered = ansi.Hardwrap(text, width, true)
+				}
+				if len(m.renderCache) > 256 {
+					m.renderCache = map[string]string{}
+				}
+				m.renderCache[cacheKey] = rendered
+			}
+			out.WriteString(strings.TrimSpace(rendered))
+		} else {
+			out.WriteString(ansi.Hardwrap(text, width, true))
+		}
+		out.WriteString("\n\n")
+	}
+	m.viewport.SetContent(out.String())
+	if atBottom || force {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m *model) View() tea.View {
+	if m.width < 35 || m.height < 14 {
+		v := tea.NewView("micro-acp\nResize the terminal to at least 35 × 14.\nCtrl+C exits.")
+		v.AltScreen = true
+		return v
+	}
+	w := m.width - 4
+	agent := "choose an agent"
+	title := "New conversation"
+	sessionID := ""
+	if m.client != nil {
+		s, _ := m.client.Snapshot()
+		agent = m.client.Agent
+		if s.Title != "" {
+			title = s.Title
+		}
+		sessionID = s.ID
+	}
+	header := accent.Bold(true).Render("μ micro-acp") + muted.Render("  /  ") + line(agent, max(8, w-16))
+	subtitle := line(m.options.Cwd, w)
+	header += "\n" + muted.Render(subtitle) + "\n" + muted.Render(strings.Repeat("─", w)) + "\n"
+	var body string
+	switch {
+	case m.permission != nil:
+		p := m.permission
+		body = accent.Bold(true).Render("Permission requested") + "\n\n"
+		if p.Request.ToolCall.Title != nil {
+			body += ansi.Hardwrap(clean(*p.Request.ToolCall.Title), w-4, true) + "\n"
+		}
+		if raw := p.Request.ToolCall.RawInput; len(raw) > 0 {
+			body += muted.Render(ansi.Hardwrap(line(string(raw), min(500, w*4)), w-4, true)) + "\n"
+		}
+		body += "\n"
+		for i, opt := range p.Request.Options {
+			prefix := "  "
+			if i == m.permissionChoice {
+				prefix = "› "
+			}
+			body += line(prefix+opt.Name+" ("+string(opt.Kind)+")", w) + "\n"
+		}
+		prefix := "  "
+		if m.permissionChoice == len(p.Request.Options) {
+			prefix = "› "
+		}
+		body += prefix + "Cancel\n\n" + muted.Render("↑/↓ choose · Enter confirm · Esc cancel")
+	case m.confirm != nil:
+		action := "Delete this session from the agent and local history?"
+		if m.localDelete {
+			action = "Forget this session locally? The agent keeps its copy."
+		}
+		body = danger.Bold(true).Render("Delete session") + "\n\n" + ansi.Hardwrap(action, w, true) + "\n\n" + line(m.confirm.Title, w) + "\n" + muted.Render(m.confirm.ID) + "\n\n" + muted.Render("y confirm · n / Esc keep session")
+	case m.page == "agents":
+		body = accent.Bold(true).Render("AGENTS") + muted.Render("  Search with / · Enter connect") + "\n" + m.picker.View()
+	case m.page == "sessions":
+		body = accent.Bold(true).Render("SESSIONS") + muted.Render("  "+line(agent, w-12)) + "\n" + m.picker.View()
+	case m.page == "commands":
+		body = accent.Bold(true).Render("COMMANDS") + "\n" + m.picker.View()
+	case m.page == "info":
+		body = accent.Bold(true).Render("AGENT & SESSION") + muted.Render("  Esc back") + "\n" + m.viewport.View()
+	default:
+		body = plain.Bold(true).Render(line(title, w-20)) + muted.Render("  "+sessionID) + "\n" + m.viewport.View()
+	}
+	body = lipgloss.NewStyle().Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
+	status := m.status
+	if m.lastError != "" {
+		status = m.lastError
+	}
+	status = line(status, w-3)
+	if m.lastError != "" {
+		status = danger.Render(status)
+	} else {
+		status = muted.Render(status)
+	}
+	if m.busy {
+		status = m.spinner.View() + " " + status
+	} else {
+		status = mint.Render("• ") + status
+	}
+	prompt := border.Width(m.width - 4).Render(m.input.View())
+	foot := muted.Render(line("Enter send · Alt+Enter newline · Ctrl+P commands · Esc stop · Ctrl+C quit", w))
+	content := lipgloss.NewStyle().Padding(0, 2).Render(header+body+"\n"+status) + "\n" + lipgloss.NewStyle().Padding(0, 1).Render(prompt) + "\n" + lipgloss.NewStyle().Padding(0, 2).Render(foot)
+	v := tea.NewView(content)
+	v.AltScreen = true
+	v.MouseMode = tea.MouseModeCellMotion
+	v.WindowTitle = "micro-acp"
+	return v
+}
