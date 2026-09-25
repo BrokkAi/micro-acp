@@ -102,7 +102,10 @@ func (m *model) completionView(height int) string {
 	if c.kind == "values" {
 		label = "Options"
 	}
-	body := muted.Render(label) + "\n"
+	if c.title != "" {
+		label = c.title
+	}
+	body := muted.Render(line(label, w)) + "\n"
 	if c.kind == "files" && m.filesLoading {
 		body += muted.Render("  Finding workspace files…")
 	} else if c.kind == "files" && m.filesError != "" {
@@ -119,7 +122,7 @@ func (m *model) pickerView(height int) string {
 	if p.kind == "agents" && m.catalogLoading {
 		title += " · updating registry"
 	}
-	result := accent.Bold(true).Render(title) + "\n" + p.input.View() + "\n" + suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
+	result := accent.Bold(true).Render(line(title, w)) + "\n" + p.input.View() + "\n" + suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
 	hint := "↑↓ navigate · Enter select · Esc back"
 	if p.kind == "sessions" {
 		hint += " · Ctrl+D delete"
@@ -167,6 +170,9 @@ func (m *model) View() tea.View {
 		elapsed := time.Since(m.startedAt).Round(time.Second)
 		statusParts = append(statusParts, m.spinner.View()+" "+muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
 	}
+	if !m.busy && m.status != "" && m.status != "Ready" && m.lastError == "" {
+		statusParts = append(statusParts, muted.Render(line(m.status, w)))
+	}
 	if m.lastError != "" {
 		statusParts = append(statusParts, danger.Render(cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
 	}
@@ -183,7 +189,15 @@ func (m *model) View() tea.View {
 			badges = append(badges, muted.Render(line(hint, w)))
 		}
 	}
-	baseHeight := lipgloss.Height(inputView) + 3
+	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
+	if m.prompting && m.input.Value() != "" {
+		footer = "Enter queue prompt · Esc stop · Alt+Enter newline"
+	}
+	footer = muted.Render(line(footer, w))
+	if m.client != nil {
+		footer = muted.Render(configurationStatus(m.client.Agent, m.client.StatusFields(), w)) + "\n" + footer
+	}
+	baseHeight := lipgloss.Height(inputView) + 2 + lipgloss.Height(footer)
 	for _, part := range append(append([]string{}, statusParts...), badges...) {
 		baseHeight += lipgloss.Height(part)
 	}
@@ -240,19 +254,7 @@ func (m *model) View() tea.View {
 		inputY = lipgloss.Height(before)
 	}
 	parts = append(parts, inputView, muted.Render(strings.Repeat("─", w)))
-	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
-	if m.client != nil {
-		if status := m.client.Status(); status != "" {
-			footer = status + "  ·  / commands · @ files"
-		}
-	}
-	if !m.busy && m.status != "" && m.status != "Ready" {
-		footer = m.status
-	}
-	if m.prompting && m.input.Value() != "" {
-		footer = "Enter queue prompt · Esc stop · Alt+Enter newline"
-	}
-	parts = append(parts, muted.Render(line(footer, w)))
+	parts = append(parts, footer)
 	content := strings.Join(parts, "\n")
 	v := tea.NewView(lipgloss.NewStyle().PaddingLeft(1).Render(content))
 	// Do not capture mouse events: copying and terminal scrollback should work.

@@ -7,10 +7,10 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/BrokkAi/acp-go"
-	"github.com/BrokkAi/micro-acp/internal/client"
 )
 
 var commands = []item{
+	{title: "Session configuration", description: "All agent options and current values · /config <option> <value>", id: "/config"},
 	{title: "Model", description: "Choose the model", id: "/model"},
 	{title: "Mode", description: "Choose the agent's operating mode", id: "/mode"},
 	{title: "Reasoning effort", description: "Choose how much the model reasons", id: "/effort"},
@@ -30,7 +30,7 @@ var commands = []item{
 	{title: "Agent details", description: "Capabilities, auth methods, modes and model options", id: "/info"},
 	{title: "Agent logs", description: "View recent stderr and the last error", id: "/logs"},
 	{title: "Authenticate", description: "Choose a login method", id: "/auth"},
-	{title: "Session settings", description: "All agent-provided options, including toggles", id: "/settings"},
+	{title: "Session settings", description: "Alias for /config · all agent options and current values", id: "/settings"},
 	{title: "Attach a file", description: "Text, images, audio, or binary resources", id: "/attach "},
 	{title: "Attach a resource link", description: "/resource <URI> adds a reference to the next prompt", id: "/resource "},
 	{title: "Clear attachments", description: "Remove queued attachments", id: "/detach"},
@@ -146,9 +146,8 @@ func (m *model) command(text string) tea.Cmd {
 			return nil
 		}
 		return m.perform("Updating "+name[1:]+"…", func() error { return c.Configure(name[1:], arg) })
-	case "/settings":
-		m.openSettings("")
-		return nil
+	case "/config", "/settings":
+		return m.configureSession(arg)
 	case "/attach":
 		if arg == "" {
 			m.input.SetValue("@")
@@ -237,45 +236,6 @@ func (m *model) allCommands() []item {
 	return all
 }
 
-func (m *model) openSettings(category string) {
-	if category == "effort" {
-		category = "thought_level"
-	}
-	var entries []item
-	for _, s := range m.client.Selectors() {
-		if category != "" && s.Category != category {
-			continue
-		}
-		entries = append(entries, item{title: s.Name, description: s.Current + " · " + s.Description, id: s.ID, value: s})
-	}
-	if len(entries) == 0 {
-		m.lastError = "Agent does not offer " + category + " settings"
-		return
-	}
-	if category != "" && len(entries) == 1 {
-		m.chooseSetting(entries[0].value.(client.Selector))
-		return
-	}
-	m.openPicker("settings", entries)
-}
-func (m *model) chooseSetting(s client.Selector) {
-	m.selector = s
-	var entries []item
-	selected := 0
-	for i, choice := range s.Choices {
-		title := choice.Name
-		if choice.Group != "" {
-			title = choice.Group + " / " + title
-		}
-		if choice.Value == s.Current {
-			title += " ✓"
-			selected = i
-		}
-		entries = append(entries, item{title: title, description: choice.Description, id: choice.Value})
-	}
-	m.openPicker("choices", entries)
-	m.picker.index = selected
-}
 func (m *model) sendPrompt(text string) tea.Cmd {
 	if m.client == nil {
 		m.lastError = "Choose an agent with /agents first"

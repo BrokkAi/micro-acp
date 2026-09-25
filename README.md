@@ -107,7 +107,11 @@ Native session operations depend on the agent's advertised capabilities. A conte
 
 ## Models, tools, and context
 
-`/model`, `/mode`, and `/effort` open searchable selectors using the agent's current options. `/settings` exposes every offered select or boolean option, including options with custom categories. Values can also be passed directly, such as `/model <id>`. Model changes refresh dependent choices such as reasoning effort. The status line shows selections, context usage, and cost when the agent reports them.
+The persistent status line below the prompt shows the connected agent and current session configuration: model, reasoning, mode, custom values, and explicit On/Off toggles. Reported context usage and cost follow the settings. It stays visible while composing, running a turn, or displaying an error. It wraps to two lines when needed; `+N more · /config` indicates fields that do not fit.
+
+`/config` opens all agent-provided session options with their current values; `/settings` is an alias. Type `/config ` to complete an option ID, then its offered values. `/config <id>` opens that option, and `/config <id> <value>` sets it directly. For example, the demo accepts `/config stream false`. The options come from ACP, including arbitrary categories, grouped choices, and booleans. Open selectors and suggestions refresh when the agent updates its configuration.
+
+`/model`, `/mode`, and `/effort` are shortcuts to the corresponding options, with completion and direct values such as `/model <id>`. Model changes refresh dependent choices such as reasoning effort.
 
 Responses stream as Markdown. Tool calls appear as compact status rows with file-change summaries; reasoning and terminal output stay compact too. Press **Ctrl+O** or run `/details` for a scrollable transcript with full tool input/output, reasoning, file locations, old/new diffs, and client terminal output. Press Esc to return to your draft. Tool updates retain earlier details when a later update only changes status. Non-text content is preserved in session files; images and audio appear as descriptive markers in the terminal.
 

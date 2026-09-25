@@ -3,7 +3,9 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/BrokkAi/acp-go/schema"
 )
@@ -156,35 +158,41 @@ func (c *Client) SetConfig(id, value string) error {
 	return fmt.Errorf("agent did not confirm %s = %s", selected.Name, value)
 }
 
-func (c *Client) Status() string {
+// StatusFields includes every advertised setting, including custom categories
+// and explicit Off values. Categories only determine the display order.
+func (c *Client) StatusFields() []string {
 	var values []string
-	for _, s := range c.Selectors() {
-		if s.Category == "model" || s.Category == "mode" || s.Category == "thought_level" {
-			name := s.Current
-			for _, o := range s.Choices {
-				if o.Value == s.Current {
-					name = o.Name
-				}
-			}
-			values = append(values, name)
+	selectors := c.Selectors()
+	rank := func(s Selector) int {
+		switch s.Category {
+		case "model":
+			return 0
+		case "thought_level":
+			return 1
+		case "mode":
+			return 2
+		default:
+			return 3
 		}
 	}
-	text := ""
-	for _, v := range values {
-		if text != "" {
-			text += " · "
+	sort.SliceStable(selectors, func(i, j int) bool { return rank(selectors[i]) < rank(selectors[j]) })
+	for _, s := range selectors {
+		name := s.Current
+		for _, o := range s.Choices {
+			if o.Value == s.Current {
+				name = o.Name
+			}
 		}
-		text += v
+		values = append(values, s.Name+" "+name)
 	}
 	s, _ := c.Snapshot()
 	if s.Usage != nil {
-		if text != "" {
-			text += " · "
-		}
-		text += fmt.Sprintf("%d/%d tokens", s.Usage.Used, s.Usage.Size)
+		values = append(values, fmt.Sprintf("%d/%d tokens", s.Usage.Used, s.Usage.Size))
 		if s.Usage.Cost != nil {
-			text += fmt.Sprintf(" · %.4f %s", s.Usage.Cost.Amount, s.Usage.Cost.Currency)
+			values = append(values, fmt.Sprintf("%.4f %s", s.Usage.Cost.Amount, s.Usage.Cost.Currency))
 		}
 	}
-	return text
+	return values
 }
+
+func (c *Client) Status() string { return strings.Join(c.StatusFields(), " · ") }

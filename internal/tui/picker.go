@@ -13,6 +13,7 @@ import (
 // Selectors live beside the composer; they never replace the conversation.
 type picker struct {
 	kind, title      string
+	category         string
 	entries, matches []item
 	input            textinput.Model
 	index            int
@@ -35,7 +36,7 @@ func filterItems(entries []item, query string) []item {
 }
 func (p *picker) filter() { p.matches = filterItems(p.entries, p.input.Value()); p.index = 0 }
 func (m *model) openPicker(kind string, entries []item) {
-	titles := map[string]string{"agents": "Choose an agent", "sessions": "Resume a session", "settings": "Session settings", "choices": m.selector.Name, "auth": "Sign in", "queue": "Queued prompts", "commands": "Commands"}
+	titles := map[string]string{"agents": "Choose an agent", "sessions": "Resume a session", "settings": "Session configuration", "choices": m.selector.Name, "auth": "Sign in", "queue": "Queued prompts", "commands": "Commands"}
 	input := textinput.New()
 	input.Placeholder = "Type to search…"
 	input.Prompt = "› "

@@ -264,6 +264,9 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	updated = m
 	defer func() {
 		m.syncTranscript()
+		if m.client != nil && m.picker != nil {
+			m.refreshSettingPicker(m.client.Selectors())
+		}
 		completionCmd := m.refreshCompletion()
 		outputCmd := m.flushOutput()
 		if m.quitting && !m.printing && len(m.printQueue) == 0 {

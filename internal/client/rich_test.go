@@ -323,6 +323,9 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 	if len(selectors) != 4 || selectors[0].Choices[0].Group != "Provider" {
 		t.Fatalf("missing grouped selector: %+v", selectors)
 	}
+	if !strings.Contains(c.Status(), "Review Off") {
+		t.Fatalf("disabled toggle missing: %s", c.Status())
+	}
 	require(t, c.Configure("mode", "code"))
 	if err := c.Configure("effort", "high"); err == nil {
 		t.Fatal("accepted effort not offered for current model")
@@ -347,7 +350,7 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 			t.Errorf("tool missing %q: %s", want, tool)
 		}
 	}
-	if !strings.Contains(c.Status(), "Deep") || !strings.Contains(c.Status(), "Code") || !strings.Contains(c.Status(), "100/4096") {
+	if !strings.Contains(c.Status(), "Deep") || !strings.Contains(c.Status(), "Code") || !strings.Contains(c.Status(), "100/4096") || !strings.Contains(c.Status(), "Review On") {
 		t.Fatalf("status: %s", c.Status())
 	}
 }

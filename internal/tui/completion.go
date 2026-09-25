@@ -11,6 +11,7 @@ import (
 
 type completion struct {
 	kind, query, signature string
+	title                  string
 	entries                []item
 	index, start, end      int // rune offsets, never byte offsets
 }
@@ -69,9 +70,27 @@ func (m *model) refreshCompletion() tea.Cmd {
 			next.kind, next.start, next.end, next.query = "values", len([]rune(name))+1, len(value), arg
 			for _, s := range m.client.Selectors() {
 				if s.Category == category {
-					for _, c := range s.Choices {
-						next.entries = append(next.entries, item{title: c.Name, id: c.Value, description: c.Description})
+					next.title = s.Name
+					next.entries = append(next.entries, choiceItems(s)...)
+				}
+			}
+		} else if m.client != nil && (name == "/config" || name == "/settings") {
+			id, query, hasValue := strings.Cut(arg, " ")
+			if !hasValue {
+				next.kind, next.title = "settings", "Session configuration"
+				next.start, next.end, next.query = len([]rune(name))+1, cursor, id
+				for next.end < len(value) && !unicode.IsSpace(value[next.end]) {
+					next.end++
+				}
+				next.entries = settingItems(m.client.Selectors(), "")
+			} else {
+				for _, s := range m.client.Selectors() {
+					if s.ID != id {
+						continue
 					}
+					next.kind, next.title = "values", s.Name
+					next.start, next.end, next.query = len([]rune(name))+len([]rune(id))+2, len(value), query
+					next.entries = choiceItems(s)
 				}
 			}
 		}
@@ -87,7 +106,7 @@ func (m *model) refreshCompletion() tea.Cmd {
 		return nil
 	}
 	next.entries = filterItems(next.entries, next.query)
-	if next.kind == "commands" {
+	if next.kind == "commands" || next.kind == "settings" || next.kind == "values" {
 		// Exact commands and command-name prefixes outrank matches in prose.
 		query := strings.ToLower(strings.TrimSpace(next.query))
 		rank := func(e item) int {
@@ -167,6 +186,9 @@ func (m *model) completionKey(msg tea.KeyPressMsg) (bool, tea.Cmd) {
 				m.input.Reset()
 				return true, m.command(text)
 			}
+			return true, nil
+		case "settings":
+			m.replaceRange(c.start, c.end, entry.id+" ")
 			return true, nil
 		}
 	}

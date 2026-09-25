@@ -18,7 +18,7 @@ Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go v0.10.0`. All
 | `session/prompt` | Multiline composer, streamed response, rich content, agent slash commands. | Lifecycle, configuration and rich content tests. |
 | `session/cancel` | Esc/Ctrl+C stops a turn, cancels pending interactions, waits for completion; disconnects unresponsive processes. | Permission/cancellation tests. |
 | `session/set_mode` | `/mode` for agents offering legacy session modes. | `TestAgentDrivenConfigurationAndRichUpdates`. |
-| `session/set_config_option` | `/model`, `/mode`, `/effort`, `/settings`; grouped select options and booleans, dependent option refresh. | `TestAgentDrivenConfigurationAndRichUpdates`. |
+| `session/set_config_option` | `/config` (`/settings` alias), option/value completion, plus `/model`, `/mode`, `/effort`; grouped choices, booleans, arbitrary categories, and dependent option refresh. | `TestAgentDrivenConfigurationAndRichUpdates`. |
 | `session/update` | All 11 stable update variants are projected; details below. | Rich updates and replay tests. |
 | `session/request_permission` | Scrollable tool details and the exact agent-provided options, Cancel by default. | Permission integration tests and TUI tests. |
 | `fs/read_text_file` | Workspace-rooted UTF-8 reads, optional line range, via `clienthost`. | `TestMCPRootsFilesystemAndAllTerminalCallbacks`. |
@@ -46,7 +46,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | `plan` | Stores the current plan and displays entry statuses. |
 | `available_commands_update` | Refreshes inline slash suggestions; resolves client command collisions through `/agent`. |
 | `current_mode_update` | Updates the current legacy mode. |
-| `config_option_update` | Replaces available settings and current values, including model-dependent options. |
+| `config_option_update` | Refreshes open selectors, completions, and the persistent status line, including custom options, On/Off values, and model-dependent choices. |
 | `session_info_update` | Updates title and timestamp. |
 | `usage_update` | Displays context used/capacity and reported cost. |
 
