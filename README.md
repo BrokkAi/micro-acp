@@ -2,7 +2,7 @@
 
 A small, entirely Go terminal client for [Agent Client Protocol](https://agentclientprotocol.com/). Built on [BrokkAi/acp-go](https://github.com/BrokkAi/acp-go), Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour v2.
 
-Stream conversations, choose models and modes, review tools and diffs, answer permission and input requests, attach files, and manage sessions without leaving your terminal. See the [ACP support matrix](docs/acp-support.md) for protocol coverage and limitations.
+A conversation and a growing prompt in your normal terminal. Type `/` for inline command suggestions or `@` to search workspace files. Completed output stays in terminal scrollback; mouse selection and copying keep working. Choose models and modes, inspect tools and diffs, answer permission and input requests, and manage sessions from the prompt. See the [ACP support matrix](docs/acp-support.md) for protocol coverage and limitations.
 
 ## Run
 
@@ -107,11 +107,11 @@ Native session operations depend on the agent's advertised capabilities. A conte
 
 ## Models, tools, and context
 
-`/model`, `/mode`, and `/effort` open searchable selectors using the agent's current options. `/settings` exposes every offered select or boolean option, including options with custom categories. Values can also be passed directly, such as `/model <id>`. Model changes refresh dependent choices such as reasoning effort. The header shows selections, context usage, and cost when the agent reports them.
+`/model`, `/mode`, and `/effort` open searchable selectors using the agent's current options. `/settings` exposes every offered select or boolean option, including options with custom categories. Values can also be passed directly, such as `/model <id>`. Model changes refresh dependent choices such as reasoning effort. The status line shows selections, context usage, and cost when the agent reports them.
 
-The transcript includes Markdown responses, reasoning, plans, tool input/output, file locations, full old/new diffs, and live client terminal output. Tool updates retain earlier details when a later update only changes status. Non-text content is preserved in session files; images and audio appear as descriptive markers in the terminal.
+Responses stream as Markdown. Tool calls appear as compact status rows with file-change summaries; reasoning and terminal output stay compact too. Press **Ctrl+O** or run `/details` for a scrollable transcript with full tool input/output, reasoning, file locations, old/new diffs, and client terminal output. Press Esc to return to your draft. Tool updates retain earlier details when a later update only changes status. Non-text content is preserved in session files; images and audio appear as descriptive markers in the terminal.
 
-Agent-provided slash commands appear in the command palette. Unknown slash commands are sent to the agent as prompts. If an agent command shares a client command's name, use `/agent <command>`, for example `/agent new`. Compaction is available through an agent's advertised command when it offers one.
+Agent-provided slash commands appear alongside client commands as you type `/`. Up/Down selects a suggestion, Tab completes it, and Enter runs it; commands that need arguments leave the cursor ready for those arguments. Unknown slash commands are sent to the agent as prompts. If an agent command shares a client command's name, use `/agent <command>`, for example `/agent new`. Compaction is available through an agent's advertised command when it offers one.
 
 Attach context using:
 
@@ -123,7 +123,7 @@ Explain @"docs/a file with spaces.md"
 /detach
 ```
 
-Tab after `@` opens a workspace file picker. `/attach` queues a file for the next prompt; `/detach` clears queued attachments and resource links. Each attachment is limited to 4 MiB. Text uses embedded context when supported and plain text otherwise. Images, audio, and binary resources require the matching agent capability. Resource links are passed to the agent without fetching them. Enter can send queued attachments without accompanying text.
+Typing `@` immediately shows matching workspace files. Git workspaces include tracked and untracked files and honor `.gitignore`. Enter or Tab inserts the selected reference at the cursor, preserving surrounding text; selecting a file does not send the prompt. Escape dismisses suggestions and keeps the draft. Paths containing spaces are quoted automatically. The file index refreshes after agent turns so newly created files become available. `/attach` queues a file for the next prompt; `/detach` clears queued attachments and resource links. Each attachment is limited to 4 MiB. Text uses embedded context when supported and plain text otherwise. Images, audio, and binary resources require the matching agent capability. Resource links are passed to the agent without fetching them. Enter can send queued attachments without accompanying text.
 
 Form requests support strings, numbers, integers, booleans, single choices, and multiple choices, with defaults and validation. Enter advances, Shift+Tab goes back, Space toggles multiple choices, and Ctrl+X skips an optional field. Review answers before selecting Submit. Ctrl+D declines and Esc cancels. URL requests show the agent, host, and complete address; selecting Submit opens the system browser. No URL opens automatically.
 
@@ -133,21 +133,26 @@ Form requests support strings, numbers, integers, booleans, single choices, and 
 | --- | --- |
 | Enter | Send prompt or select a list entry. |
 | Alt+Enter / Ctrl+J | Insert a newline. Shift+Enter also works in compatible terminals. |
-| Ctrl+P | Command palette. |
+| Ctrl+P | Compact command search. |
+| Ctrl+O | Expand full transcript and tool details; press again or Esc to return. |
 | Ctrl+G | Agent picker. |
 | Ctrl+S | Session picker. |
 | Ctrl+N | New session. |
-| Tab | Complete a slash command or open the `@file` picker. |
+| Tab | Complete the selected command, setting, or `@file` suggestion. |
 | Up / Alt+Up, Down / Alt+Down | Recall prompt history; Up works on the first input line. |
-| Page Up / Page Down / mouse wheel | Scroll the conversation. |
-| Esc | Cancel the active turn or close a picker. |
-| Ctrl+C | Cancel an active turn; otherwise quit. |
-| `/` in a picker | Filter its entries. Enter applies the filter; Enter again selects. |
+| Terminal scrollback / mouse wheel | Scroll completed output; mouse selection is available. |
+| Page Up / Page Down | Scroll expanded details and dialog explanations. |
+| Esc | Dismiss suggestions/dialogs first; otherwise stop the active turn. |
+| Ctrl+C | Stop an active turn; otherwise clear a draft, or press twice on an empty prompt to exit. |
+| Ctrl+D | Exit from an empty, idle prompt. |
+| Type in a selector | Filter immediately; one Enter selects, Esc returns to the draft. |
 | Ctrl+D in the session picker | Confirm deletion, or local removal if remote deletion is unsupported. |
+
+You can compose the next prompt while the agent works. Enter queues it, and queued prompts run in order after a successful turn. Stopping or failing a turn pauses the queue; `/queue` lets you edit an entry, and `/queue send` continues it. Queued prompts remain in memory and stay tied to their original session; they are not saved across restarts. Multiline paste stays in the draft until you send it.
 
 Other commands: `/agents`, `/help`, `/info`, `/auth`, `/logout`, `/refresh`, `/quit`. `/info` displays advertised capabilities and configuration. `/logs` shows recent agent stderr and the last error; `/reconnect` restarts the agent and reloads the saved session when supported. `/logout` requires the agent's logout capability.
 
-Permission dialogs show the tool details and the agent's choices and default to **Cancel**. Page Up/Down scroll long permission and input requests. No automatic approval is enabled. Filesystem and terminal callbacks use `acp-go/clienthost`, rooted at the workspace and configured additional directories. This client keeps one active session per agent connection and releases its terminals on session switches. Agents and their subprocesses run with your account's OS permissions; this is not an OS sandbox.
+Permission dialogs show the tool details and the agent's choices and default to **Cancel**. Page Up/Down scroll long explanations while the active input and action choices stay visible. No automatic approval is enabled. Filesystem and terminal callbacks use `acp-go/clienthost`, rooted at the workspace and configured additional directories. This client keeps one active session per agent connection and releases its terminals on session switches. Agents and their subprocesses run with your account's OS permissions; this is not an OS sandbox.
 
 ## Registry and storage
 
@@ -181,6 +186,8 @@ make test       # Race detector, including real ACP subprocess integration tests
 make vet
 ```
 
-Tests require no external agents, model accounts, or internet access. Registry tests use loopback HTTP/TLS servers. CI runs on Linux and macOS.
+Tests require no external agents, model accounts, or internet access once Go dependencies are downloaded. Registry tests use loopback HTTP/TLS servers. `TestTerminalWorkflow` builds the actual binary and drives it through a PTY and a Go terminal emulator, covering inline completion, shrinking menus, file attachments, permission/form dialogs, cancellation, queues, session creation/loading/forking/deletion, resizing, and exit. CI runs on Linux and macOS. `go test -short ./...` skips the PTY test.
+
+A separate manual check on 2026-09-25 connected to registry `codex-acp` 1.13.1 with an existing login, selected model/mode menus, attached a file, completed a real file edit, expanded its tool diff, and browsed sessions. That is one live adapter check, not a compatibility claim for every registry agent.
 
 The implementation is split into `internal/client` (ACP and process lifecycle), `internal/registry` (discovery/install), `internal/store` (sessions), `internal/config`, `internal/forms`, `internal/tui`, and `internal/demo`.

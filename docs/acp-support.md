@@ -40,11 +40,11 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | --- | --- |
 | `user_message_chunk` | Restores replayed prompts during load. |
 | `agent_message_chunk` | Streams Markdown, retains message IDs and non-text blocks. |
-| `agent_thought_chunk` | Distinct thinking entries. |
-| `tool_call` | Title, kind/status, name, inputs, content, file locations and outputs. |
+| `agent_thought_chunk` | Compact thinking entries; full text in Ctrl+O details. |
+| `tool_call` | Compact title/status and file-change summary; Ctrl+O exposes kind, name, inputs, content, file locations and outputs. |
 | `tool_call_update` | Merges partial updates without discarding omitted fields; accepts explicit empty lists. |
 | `plan` | Stores the current plan and displays entry statuses. |
-| `available_commands_update` | Refreshes agent commands in the palette; resolves client command collisions through `/agent`. |
+| `available_commands_update` | Refreshes inline slash suggestions; resolves client command collisions through `/agent`. |
 | `current_mode_update` | Updates the current legacy mode. |
 | `config_option_update` | Replaces available settings and current values, including model-dependent options. |
 | `session_info_update` | Updates title and timestamp. |
@@ -65,3 +65,7 @@ Form fields support the restricted flat schema: strings, integers, numbers, bool
 - Registry freshness concerns discovery and the next agent launch. An already-running process is not upgraded during a turn.
 
 Run `make test` for the race-enabled suite and `make vet` for static checks. Tests use local subprocess agents and loopback registry servers; they do not use live model accounts. `--demo` exercises streaming, session history, settings, permission requests, forms and cancellation without credentials.
+
+## Terminal interaction verification
+
+`TestTerminalWorkflow` runs the built application in a PTY with a Go terminal emulator. It checks what the terminal actually displays, including cursor movement when suggestions shrink, rather than only comparing `View()` strings. The credential-free demo covers the core composer and session workflows; smaller TUI tests cover Unicode references, paste/history, ignored files, queue context, and compact dialogs. A live `codex-acp` 1.13.1 file-edit check was also run on 2026-09-25; other registry adapters have not been exercised live.
