@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -11,7 +10,7 @@ type authDoneMsg struct {
 }
 
 func (m *model) openAuth() {
-	var entries []list.Item
+	var entries []item
 	for _, choice := range m.client.AuthChoices() {
 		description := choice.Description
 		if choice.Terminal {

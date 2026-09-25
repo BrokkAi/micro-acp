@@ -5,13 +5,18 @@ import (
 	"net/url"
 	"strings"
 
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/micro-acp/internal/client"
 )
 
 var commands = []item{
+	{title: "Model", description: "Choose the model", id: "/model"},
+	{title: "Mode", description: "Choose the agent's operating mode", id: "/mode"},
+	{title: "Reasoning effort", description: "Choose how much the model reasons", id: "/effort"},
+	{title: "Tool details", description: "Expand tools, reasoning and full output · Ctrl+O", id: "/details"},
+	{title: "Queued prompts", description: "Edit queued prompts; /queue send continues a paused queue", id: "/queue"},
+
 	{title: "New session", description: "Start a fresh conversation", id: "/new"},
 	{title: "Close session", description: "Close the active session while keeping its history", id: "/close"},
 	{title: "Log out", description: "End authentication with the connected agent", id: "/logout"},
@@ -25,9 +30,6 @@ var commands = []item{
 	{title: "Agent details", description: "Capabilities, auth methods, modes and model options", id: "/info"},
 	{title: "Agent logs", description: "View recent stderr and the last error", id: "/logs"},
 	{title: "Authenticate", description: "Choose a login method", id: "/auth"},
-	{title: "Select mode", description: "Choose an agent operating mode", id: "/mode"},
-	{title: "Select model", description: "Choose a model", id: "/model"},
-	{title: "Reasoning effort", description: "Choose a reasoning level", id: "/effort"},
 	{title: "Session settings", description: "All agent-provided options, including toggles", id: "/settings"},
 	{title: "Attach a file", description: "Text, images, audio, or binary resources", id: "/attach "},
 	{title: "Attach a resource link", description: "/resource <URI> adds a reference to the next prompt", id: "/resource "},
@@ -38,14 +40,7 @@ var commands = []item{
 	{title: "Quit", description: "Close the agent and exit", id: "/quit"},
 }
 
-func (m *model) openCommands() {
-	all := m.allCommands()
-	items := make([]list.Item, len(all))
-	for i, c := range all {
-		items[i] = c
-	}
-	m.openPicker("commands", items)
-}
+func (m *model) openCommands() { m.openPicker("commands", m.allCommands()) }
 func (m *model) command(text string) tea.Cmd {
 	parts := strings.Fields(text)
 	if len(parts) == 0 {
@@ -57,15 +52,29 @@ func (m *model) command(text string) tea.Cmd {
 	m.lastError = ""
 	switch name {
 	case "/quit", "/exit":
-		return tea.Quit
+		return m.quit()
 	case "/agents":
+		if arg != "" {
+			for _, agent := range m.agents {
+				if agent.id == arg {
+					if m.busy {
+						m.lastError = "Stop the current turn with Esc first"
+						return nil
+					}
+					return m.connect(agent)
+				}
+			}
+		}
 		m.openPicker("agents", m.agents)
+		m.picker.input.SetValue(arg)
+		m.picker.filter()
 		return nil
 	case "/help":
 		m.openCommands()
 		return nil
 	case "/refresh":
-		m.busy = true
+		m.catalogLoading = true
+		m.filesLoaded = false
 		m.status = "Refreshing registry…"
 		return m.fetchCatalog()
 	}
@@ -74,6 +83,10 @@ func (m *model) command(text string) tea.Cmd {
 		return nil
 	}
 	c := m.client
+	if m.busy && name != "/info" && name != "/logs" && name != "/details" && name != "/queue" && name != "/attach" && name != "/detach" && name != "/resource" {
+		m.lastError = "Stop the current turn with Esc before changing the session"
+		return nil
+	}
 	switch name {
 	case "/reconnect":
 		if s, _ := c.Snapshot(); s.ID != "" && c.CanLoad() {
@@ -87,11 +100,14 @@ func (m *model) command(text string) tea.Cmd {
 		return m.perform("Closing session…", c.CloseSession)
 	case "/logout":
 		return m.perform("Logging out…", c.Logout)
-	case "/sessions":
+	case "/sessions", "/resume":
 		m.busy = true
 		m.status = "Loading sessions…"
 		return func() tea.Msg { s, err := c.Sessions(); return sessionsMsg{s, err} }
 	case "/load":
+		if arg == "" {
+			return m.command("/sessions")
+		}
 		s, err := m.store.Load(arg)
 		if err != nil {
 			m.lastError = err.Error()
@@ -136,7 +152,7 @@ func (m *model) command(text string) tea.Cmd {
 	case "/attach":
 		if arg == "" {
 			m.input.SetValue("@")
-			return m.findFiles()
+			return m.refreshCompletion()
 		}
 		if _, err := c.Attachment(arg); err != nil {
 			m.lastError = err.Error()
@@ -165,6 +181,21 @@ func (m *model) command(text string) tea.Cmd {
 			return nil
 		}
 		return m.sendPrompt("/" + strings.TrimPrefix(arg, "/"))
+	case "/details":
+		m.page = "details"
+		m.refreshDetails()
+		m.viewport.GotoBottom()
+		return nil
+	case "/queue":
+		if arg == "send" && !m.busy && len(m.queued) > 0 {
+			return m.sendQueued()
+		}
+		var entries []item
+		for i, q := range m.queued {
+			entries = append(entries, item{title: q.text, description: "Enter to edit this queued prompt", value: i})
+		}
+		m.openPicker("queue", entries)
+		return nil
 	case "/info":
 		m.info = c.Details()
 		m.page = "info"
@@ -187,6 +218,9 @@ func (m *model) command(text string) tea.Cmd {
 
 func (m *model) allCommands() []item {
 	all := append([]item(nil), commands...)
+	for i := range all {
+		all[i].arguments = strings.HasSuffix(all[i].id, " ")
+	}
 	if m.client != nil {
 		s, _ := m.client.Snapshot()
 		for _, command := range s.Commands {
@@ -197,7 +231,7 @@ func (m *model) allCommands() []item {
 					break
 				}
 			}
-			all = append(all, item{title: name, description: "Agent · " + command.Description, id: name})
+			all = append(all, item{title: name, description: "Agent · " + command.Description, id: name, arguments: command.Input != nil})
 		}
 	}
 	return all
@@ -207,7 +241,7 @@ func (m *model) openSettings(category string) {
 	if category == "effort" {
 		category = "thought_level"
 	}
-	var entries []list.Item
+	var entries []item
 	for _, s := range m.client.Selectors() {
 		if category != "" && s.Category != category {
 			continue
@@ -219,14 +253,14 @@ func (m *model) openSettings(category string) {
 		return
 	}
 	if category != "" && len(entries) == 1 {
-		m.chooseSetting(entries[0].(item).value.(client.Selector))
+		m.chooseSetting(entries[0].value.(client.Selector))
 		return
 	}
 	m.openPicker("settings", entries)
 }
 func (m *model) chooseSetting(s client.Selector) {
 	m.selector = s
-	var entries []list.Item
+	var entries []item
 	selected := 0
 	for i, choice := range s.Choices {
 		title := choice.Name
@@ -240,31 +274,33 @@ func (m *model) chooseSetting(s client.Selector) {
 		entries = append(entries, item{title: title, description: choice.Description, id: choice.Value})
 	}
 	m.openPicker("choices", entries)
-	m.picker.Select(selected)
+	m.picker.index = selected
 }
 func (m *model) sendPrompt(text string) tea.Cmd {
-	c := m.client
-	if c == nil {
-		m.lastError = "Choose an agent first"
+	if m.client == nil {
+		m.lastError = "Choose an agent with /agents first"
+		return nil
+	}
+	if m.busy && !m.prompting {
+		m.lastError = "Wait for the agent connection to finish"
 		return nil
 	}
 	blocks, err := m.promptBlocks(text)
 	if err != nil {
 		m.lastError = err.Error()
-		m.input.SetValue(text)
 		return nil
 	}
+	s, _ := m.client.Snapshot()
+	q := queuedPrompt{text: text, blocks: blocks, attachments: m.attachments, resources: m.resources, sessionID: s.ID}
+	m.input.Reset()
+	m.completion = nil
 	m.attachments = nil
 	m.resources = nil
-	m.busy = true
-	m.retryOperation = nil
-	m.prompting = true
-	m.lastError = ""
-	m.status = "Working…"
-	m.draft = ""
-	m.viewport.GotoBottom()
-	return func() tea.Msg {
-		reason, err := c.PromptContent(blocks)
-		return resultMsg{status: fmt.Sprintf("Turn finished · %s", reason), err: err}
+	if m.prompting {
+		m.queued = append(m.queued, q)
+		m.status = fmt.Sprintf("%d prompt(s) queued", len(m.queued))
+		return nil
 	}
+	m.queuePaused = false
+	return m.startPrompt(q)
 }

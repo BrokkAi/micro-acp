@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/acp-go/schema"
@@ -23,34 +22,21 @@ func TestPermissionDefaultsToCancel(t *testing.T) {
 	}
 }
 
-func TestPickerPasteAndAsyncFiltering(t *testing.T) {
+func TestCompactPickerSearchAndSingleEnter(t *testing.T) {
 	m := newModel(context.Background(), Options{})
-	m.busy = false
-	m.openPicker("agents", []list.Item{item{title: "Alpha", id: "alpha"}, item{title: "Beta", id: "beta"}})
-	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
-	_, cmd := m.Update(tea.PasteMsg{Content: "beta"})
-	var applyMatches func(tea.Cmd)
-	applyMatches = func(cmd tea.Cmd) {
-		if cmd == nil {
-			return
-		}
-		switch msg := cmd().(type) {
-		case tea.BatchMsg:
-			for _, child := range msg {
-				applyMatches(child)
-			}
-		case list.FilterMatchesMsg:
-			m.Update(msg)
-		}
-	}
-	applyMatches(cmd)
-	visible := m.picker.VisibleItems()
-	if len(visible) != 1 || visible[0].(item).id != "beta" {
-		t.Fatalf("filter results not applied: %+v", visible)
+	m.input.SetValue("keep this draft")
+	m.openPicker("settings", []item{{title: "Alpha", id: "alpha", value: client.Selector{ID: "alpha"}}, {title: "Beta", id: "beta", value: client.Selector{ID: "beta", Name: "Beta", Choices: []client.Choice{{Value: "yes", Name: "Yes"}}}}})
+	m.Update(tea.PasteMsg{Content: "beta"})
+	if len(m.picker.matches) != 1 || m.picker.matches[0].id != "beta" {
+		t.Fatal("typing did not filter choices")
 	}
 	m.Update(keyPress(tea.KeyEnter, 0))
-	if selected := m.picker.SelectedItem().(item); selected.id != "beta" {
-		t.Fatal("filter selected wrong agent")
+	if m.picker == nil || m.picker.kind != "choices" {
+		t.Fatal("Enter did not select immediately")
+	}
+	m.Update(keyPress(tea.KeyEscape, 0))
+	if m.picker != nil || m.input.Value() != "keep this draft" {
+		t.Fatal("selector lost the draft")
 	}
 }
 func TestCancelledPermissionDoesNotBlockNext(t *testing.T) {
@@ -86,7 +72,7 @@ func TestCommandsDoNotLaunchWithoutAgent(t *testing.T) {
 		t.Fatal("new session should require an agent")
 	}
 	m.command("/help")
-	if m.page != "commands" || len(m.picker.Items()) < 10 {
+	if m.picker == nil || m.picker.kind != "commands" || len(m.picker.entries) < 10 {
 		t.Fatal("command palette missing")
 	}
 }

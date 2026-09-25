@@ -2,13 +2,11 @@ package tui
 
 import (
 	"context"
-	"fmt"
 	"sort"
 	"strings"
 	"time"
 
 	"charm.land/bubbles/v2/key"
-	"charm.land/bubbles/v2/list"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -29,16 +27,11 @@ type Options struct {
 	Resume     *store.Session
 	Offline    bool
 }
-
 type item struct {
 	title, description, id string
 	value                  any
+	arguments              bool
 }
-
-func (i item) Title() string       { return clean(i.title) }
-func (i item) Description() string { return clean(i.description) }
-func (i item) FilterValue() string { return i.title + " " + i.id + " " + i.description }
-
 type catalogMsg struct {
 	snapshot registry.Snapshot
 	err      error
@@ -51,6 +44,8 @@ type disconnectedMsg struct{ client *client.Client }
 type resultMsg struct {
 	status string
 	err    error
+	reason schema.StopReason
+	prompt bool
 }
 type sessionsMsg struct {
 	sessions []store.Session
@@ -58,48 +53,66 @@ type sessionsMsg struct {
 }
 type permissionMsg struct{ permission client.Permission }
 type pulseMsg time.Time
+type printedMsg struct{}
+type queuedPrompt struct {
+	text        string
+	blocks      []acp.Content
+	attachments []string
+	resources   []acp.Content
+	sessionID   string
+}
 
 type model struct {
-	ctx               context.Context
-	options           Options
-	registry          registry.Client
-	store             store.Store
-	client            *client.Client
-	catalog           registry.Snapshot
-	agents            []list.Item
-	page              string
-	picker            list.Model
-	input             textarea.Model
-	viewport          viewport.Model
-	spinner           spinner.Model
-	width, height     int
-	busy              bool
-	prompting         bool
-	status            string
-	lastError         string
-	permission        *client.Permission
-	permissionQueue   []client.Permission
-	permissionChoice  int
-	confirm           *store.Session
-	localDelete       bool
-	revision          uint64
-	renderCache       map[string]string
-	info              string
-	started           bool
-	selector          client.Selector
-	history           []string
-	historyIndex      int
-	draft             string
-	attachments       []string
-	resources         []acp.Content
-	filePrefix        string
-	elicitation       *elicitationUI
-	elicitationQueue  []client.Elicitation
-	interactionOffset int
-	retryOperation    func() error
-	authWaiting       bool
-	interactions      client.Interactions
-	resumeTarget      *store.Session
+	ctx                        context.Context
+	options                    Options
+	registry                   registry.Client
+	store                      store.Store
+	client                     *client.Client
+	catalog                    registry.Snapshot
+	agents                     []item
+	page                       string
+	picker                     *picker
+	completion                 *completion
+	dismissedCompletion        string
+	files                      []string
+	filesLoading, filesLoaded  bool
+	filesError                 string
+	input                      textarea.Model
+	viewport                   viewport.Model
+	spinner                    spinner.Model
+	width, height              int
+	busy, prompting            bool
+	status, lastError          string
+	startedAt                  time.Time
+	permission                 *client.Permission
+	permissionQueue            []client.Permission
+	permissionChoice           int
+	confirm                    *store.Session
+	localDelete                bool
+	info                       string
+	started, catalogLoading    bool
+	selector                   client.Selector
+	history                    []string
+	historyIndex               int
+	draft                      string
+	attachments                []string
+	resources                  []acp.Content
+	elicitation                *elicitationUI
+	elicitationQueue           []client.Elicitation
+	interactionOffset          int
+	retryOperation             func() error
+	authWaiting                bool
+	interactions               client.Interactions
+	resumeTarget               *store.Session
+	queued                     []queuedPrompt
+	queuePaused                bool
+	printedSession             string
+	printedIndex, streamPrefix int
+	live                       string
+	renderCache                map[string]string
+	printQueue                 []string
+	printing, quitting         bool
+	exitArmed                  time.Time
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -116,12 +129,17 @@ func Run(ctx context.Context, options Options) error {
 }
 func newModel(ctx context.Context, options Options) *model {
 	input := textarea.New()
-	input.Placeholder = "Ask anything, or / for commands…"
-	input.Prompt = "› "
+	input.Placeholder = "Ask anything…  / commands · @ files"
+	input.Prompt = "❯ "
 	input.ShowLineNumbers = false
 	input.CharLimit = 128 * 1024
-	input.SetHeight(3)
+	input.DynamicHeight = true
+	input.MinHeight = 1
+	input.MaxHeight = 8
+	input.MaxContentHeight = 10000
+	input.SetHeight(1)
 	input.SetWidth(76)
+	input.SetVirtualCursor(false)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
 	styles := input.Styles()
 	styles.Focused.CursorLine = plain
@@ -131,14 +149,30 @@ func newModel(ctx context.Context, options Options) *model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = accent
-	picker := list.New(nil, list.NewDefaultDelegate(), 76, 18)
-	picker.SetShowTitle(false)
-	picker.SetShowHelp(true)
-	picker.DisableQuitKeybindings()
-	return &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "agents", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(18)), spinner: s, picker: picker, width: 80, height: 30, busy: true, status: "Refreshing the ACP registry…", renderCache: map[string]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
+	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
+	m.rebuildAgents()
+	return m
 }
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.fetchCatalog(), m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation())
+	m.queueOutput(accent.Bold(true).Render("micro-acp") + muted.Render("  ·  "+clean(m.options.Cwd)) + "\n")
+	cmds := []tea.Cmd{m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation()}
+	if m.options.Agent != "demo" {
+		m.catalogLoading = true
+		cmds = append(cmds, m.fetchCatalog())
+	}
+	if m.options.Agent != "" {
+		for _, entry := range m.agents {
+			if entry.id == m.options.Agent {
+				m.started = true
+				cmds = append(cmds, m.connect(entry))
+				break
+			}
+		}
+	} else {
+		m.openPicker("agents", m.agents)
+	}
+	cmds = append(cmds, m.flushOutput())
+	return tea.Batch(cmds...)
 }
 func pulse() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return pulseMsg(t) })
@@ -146,6 +180,26 @@ func pulse() tea.Cmd {
 func (m *model) fetchCatalog() tea.Cmd {
 	r, offline, ctx := m.registry, m.options.Offline, m.ctx
 	return func() tea.Msg { s, e := r.Load(ctx, offline); return catalogMsg{s, e} }
+}
+func (m *model) rebuildAgents() {
+	m.agents = nil
+	names := make([]string, 0, len(m.options.Config.Agents))
+	for name := range m.options.Config.Agents {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	if m.options.Command != nil {
+		m.agents = append(m.agents, item{title: m.options.Agent, description: "Custom command", id: m.options.Agent, value: *m.options.Command})
+	}
+	for _, name := range names {
+		cmd := m.options.Config.Agents[name]
+		m.agents = append(m.agents, item{title: name, description: cmd.Command, id: name, value: cmd})
+	}
+	for _, a := range m.catalog.Index.Agents {
+		if _, custom := m.options.Config.Agents[a.ID]; !custom {
+			m.agents = append(m.agents, item{title: a.Name, description: a.Description, id: a.ID, value: a})
+		}
+	}
 }
 func (m *model) waitPermission() tea.Cmd {
 	requests, ctx := m.interactions.Permissions, m.ctx
@@ -158,26 +212,22 @@ func (m *model) waitPermission() tea.Cmd {
 		}
 	}
 }
-func (m *model) openPicker(page string, items []list.Item) {
-	m.page = page
-	m.picker.ResetFilter()
-	m.picker.SetItems(items)
-	m.picker.Select(0)
-}
 func (m *model) connect(selected item) tea.Cmd {
 	m.busy = true
+	m.startedAt = time.Now()
 	m.lastError = ""
-	m.status = "Starting " + selected.title + "…"
+	m.status = "Starting " + selected.title
 	m.page = "chat"
+	m.picker = nil
+	m.completion = nil
 	ctx, cwd, r, st, settings, interactions := m.ctx, m.options.Cwd, m.registry, m.store, m.options.Config.Session, m.interactions
 	old := m.client
 	m.client = nil
+	m.live = ""
 	m.permission = nil
 	m.permissionQueue = nil
 	m.elicitation = nil
 	m.elicitationQueue = nil
-	m.attachments = nil
-	m.resources = nil
 	m.retryOperation = nil
 	return func() tea.Msg {
 		if old != nil {
@@ -202,91 +252,90 @@ func (m *model) connect(selected item) tea.Cmd {
 }
 func (m *model) perform(status string, fn func() error) tea.Cmd {
 	m.busy = true
+	m.startedAt = time.Now()
 	m.status = status
 	m.lastError = ""
 	m.retryOperation = fn
 	return func() tea.Msg { return resultMsg{status: "Ready", err: fn()} }
 }
-
-func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+func (m *model) quit() tea.Cmd { m.quitting = true; return nil }
+func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
+	updated = m
+	defer func() {
+		m.syncTranscript()
+		completionCmd := m.refreshCompletion()
+		outputCmd := m.flushOutput()
+		if m.quitting && !m.printing && len(m.printQueue) == 0 {
+			cmd = tea.Sequence(cmd, tea.Quit)
+			return
+		}
+		cmd = tea.Batch(cmd, completionCmd, outputCmd)
+	}()
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
-		m.input.SetWidth(max(10, m.width-6))
+		m.input.MaxHeight = min(8, max(1, m.height/3))
+		m.input.SetWidth(max(10, m.width-4))
+		m.viewport.SetWidth(max(10, m.width-4))
+		m.viewport.SetHeight(max(3, m.height-10))
+		m.renderCache = map[string]string{}
+		if m.picker != nil {
+			m.picker.input.SetWidth(max(10, m.width-8))
+		}
 		if m.elicitation != nil {
 			m.elicitation.input.SetWidth(max(10, m.width-8))
 		}
-		m.picker.SetSize(max(10, m.width-4), max(4, m.height-10))
-		m.viewport.SetWidth(max(10, m.width-4))
-		m.viewport.SetHeight(max(3, m.height-13))
-		m.renderCache = map[string]string{}
-		m.renderTranscript(true)
+	case printedMsg:
+		m.printing = false
 	case catalogMsg:
-		m.busy = false
+		m.catalogLoading = false
+		if m.status == "Refreshing registry…" {
+			m.status = "Ready"
+		}
 		m.catalog = msg.snapshot
-		m.agents = nil
-		names := make([]string, 0, len(m.options.Config.Agents))
-		for name := range m.options.Config.Agents {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			cmd := m.options.Config.Agents[name]
-			m.agents = append(m.agents, item{title: name, description: "Custom · " + cmd.Command, id: name, value: cmd})
-		}
-		for _, a := range msg.snapshot.Index.Agents {
-			if _, custom := m.options.Config.Agents[a.ID]; !custom {
-				m.agents = append(m.agents, item{title: a.Name, description: a.Version + " · " + a.Kind() + " · " + a.Description, id: a.ID, value: a})
-			}
-		}
-		if m.options.Command != nil {
-			m.agents = append([]list.Item{item{title: m.options.Agent, description: "Custom command", id: m.options.Agent, value: *m.options.Command}}, m.agents...)
-		}
-		m.status = fmt.Sprintf("%d agents · registry checked %s", len(m.agents), msg.snapshot.FetchedAt.Local().Format("15:04"))
-		if msg.snapshot.Warning != "" {
-			m.status = msg.snapshot.Warning
-		}
+		m.rebuildAgents()
 		if msg.err != nil {
-			m.lastError = msg.err.Error()
-			m.status = "Registry unavailable · custom agents are still available"
-		}
-		if !m.started {
-			m.started = true
-			if m.options.Agent != "" {
-				for _, entry := range m.agents {
-					i := entry.(item)
-					if i.id == m.options.Agent {
-						return m, m.connect(i)
-					}
-				}
-				m.lastError = "Unknown agent: " + m.options.Agent
+			m.catalog.Warning = msg.err.Error()
+			if m.client == nil && !m.busy {
+				m.lastError = "Registry unavailable. Use a configured agent, /refresh, or -- /path/to/agent."
 			}
 		}
-		if m.page == "agents" {
+		if !m.started && m.options.Agent != "" {
+			m.started = true
+			for _, entry := range m.agents {
+				if entry.id == m.options.Agent {
+					return m, m.connect(entry)
+				}
+			}
+			m.lastError = "Unknown agent: " + m.options.Agent
 			m.openPicker("agents", m.agents)
+		}
+		if m.picker != nil && m.picker.kind == "agents" {
+			m.picker.entries = m.agents
+			m.picker.filter()
 		}
 	case connectedMsg:
 		m.busy = false
 		if msg.err != nil {
 			m.lastError = msg.err.Error()
-			m.status = "Connection failed · /agents to choose again"
+			m.status = "Connection failed · /agents to choose another"
 			return m, nil
 		}
 		m.client = msg.client
-		m.revision = 0
-		m.renderCache = map[string]string{}
 		m.page = "chat"
+		m.printedSession = ""
+		m.renderCache = map[string]string{}
 		c := m.client
-		var cmd tea.Cmd
+		var action tea.Cmd
 		if m.options.Resume != nil {
 			s := *m.options.Resume
 			m.resumeTarget = &s
 			m.options.Resume = nil
-			cmd = m.perform("Loading session…", func() error { return c.Load(s) })
+			action = m.perform("Resuming session", func() error { return c.Load(s) })
 		} else {
-			cmd = m.perform("Creating session…", c.New)
+			action = m.perform("Creating session", c.New)
 		}
-		return m, tea.Batch(cmd, func() tea.Msg { <-c.Done(); return disconnectedMsg{c} })
+		return m, tea.Batch(action, func() tea.Msg { <-c.Done(); return disconnectedMsg{c} })
 	case disconnectedMsg:
 		if msg.client == m.client {
 			m.lastError = "Agent disconnected. /logs shows details; /reconnect restarts it."
@@ -295,51 +344,49 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
+		if msg.prompt {
+			m.filesLoaded = false
+		}
 		m.status = msg.status
 		if msg.err != nil {
 			m.lastError = msg.err.Error()
 			m.status = "Action failed"
+			m.queuePaused = true
 			if acp.IsAuthRequired(msg.err) {
 				m.openAuth()
-				return m, nil
 			}
-		} else {
+		}
+		if msg.err == nil {
 			m.lastError = ""
 			m.retryOperation = nil
 			m.resumeTarget = nil
 		}
-		m.renderTranscript(true)
-		if m.client != nil {
-			s, _ := m.client.Snapshot()
-			m.history = nil
-			for _, entry := range s.Messages {
-				if entry.Role == "user" {
-					text := entry.Text
-					if len(entry.Content) > 0 && entry.Content[0].Text != nil {
-						text = entry.Content[0].Text.Text
-					}
-					m.history = append(m.history, text)
-				}
-			}
-			m.historyIndex = len(m.history)
+		if msg.reason == schema.StopReasonCancelled {
+			m.status = "Stopped"
+			m.queuePaused = true
+		}
+		m.syncTranscript()
+		m.rebuildHistory()
+		if msg.prompt && msg.err == nil && !m.queuePaused && len(m.queued) > 0 {
+			return m, m.sendQueued()
 		}
 	case sessionsMsg:
 		m.busy = false
-		var items []list.Item
+		m.status = "Ready"
+		var entries []item
 		for _, s := range msg.sessions {
-			items = append(items, item{title: s.Title, description: s.ID + " · " + s.UpdatedAt.Local().Format("Jan 02 15:04"), id: s.ID, value: s})
+			entries = append(entries, item{title: s.Title, description: s.UpdatedAt.Local().Format("Jan 02 15:04") + " · " + s.ID, id: s.ID, value: s})
 		}
-		m.openPicker("sessions", items)
-		m.status = "Enter load · Ctrl+D delete · Esc back"
+		m.openPicker("sessions", entries)
 		if msg.err != nil {
 			m.lastError = msg.err.Error()
 		}
 	case filesMsg:
-		m.busy = false
-		m.filePrefix = msg.prefix
-		m.openPicker("files", msg.entries)
+		m.filesLoading = false
+		m.filesLoaded = true
+		m.files = msg.paths
 		if msg.err != nil {
-			m.lastError = msg.err.Error()
+			m.filesError = msg.err.Error()
 		}
 	case permissionMsg:
 		m.permissionQueue = append(m.permissionQueue, msg.permission)
@@ -356,7 +403,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastError = msg.err.Error()
 			return m, nil
 		}
-		m.status = "Authenticated"
+		m.status = "Signed in"
 		if msg.terminal {
 			c := m.client
 			if m.resumeTarget != nil {
@@ -367,11 +414,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.connect(item{title: c.Agent, id: c.Agent, value: c.Invocation()})
 		}
 		if m.retryOperation != nil {
-			retry := m.retryOperation
-			return m, m.perform("Continuing…", retry)
+			return m, m.perform("Continuing", m.retryOperation)
 		}
 		if s, _ := m.client.Snapshot(); s.ID == "" {
-			return m, m.perform("Creating session…", m.client.New)
+			return m, m.perform("Creating session", m.client.New)
 		}
 	case browserMsg:
 		if msg.err != nil {
@@ -390,7 +436,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			select {
 			case <-m.elicitation.event.Done:
 				m.elicitation = nil
-				return m, tea.Batch(m.nextElicitation(), pulse())
+				cmd = m.nextElicitation()
 			default:
 			}
 		}
@@ -398,221 +444,177 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport.SetContent(clean(m.client.Diagnostics()))
 			m.viewport.GotoBottom()
 		}
-		m.renderTranscript(false)
-		return m, pulse()
+		return m, tea.Batch(cmd, pulse())
 	case spinner.TickMsg:
-		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
 	case tea.KeyPressMsg:
-		k := msg.String()
-		if k == "ctrl+c" {
-			if m.prompting && m.client != nil {
-				c := m.client
-				m.status = "Cancelling…"
-				return m, func() tea.Msg {
-					if err := c.Cancel(); err != nil {
-						return resultMsg{err: err}
-					}
-					return nil
-				}
-			}
-			return m, tea.Quit
+		return m, m.key(msg)
+	}
+	if m.permission != nil || m.confirm != nil {
+		return m, nil
+	}
+	if m.elicitation != nil {
+		m.elicitation.input, cmd = m.elicitation.input.Update(msg)
+		return m, cmd
+	}
+	if m.picker != nil {
+		m.picker.input, cmd = m.picker.input.Update(msg)
+		m.picker.filter()
+		return m, cmd
+	}
+	if m.page == "chat" {
+		m.input, cmd = m.input.Update(msg)
+	}
+	return m, cmd
+}
+func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
+	k := msg.String()
+	if k == "ctrl+c" {
+		if m.prompting && m.client != nil {
+			m.queuePaused = true
+			c := m.client
+			m.status = "Stopping"
+			return func() tea.Msg { _ = c.Cancel(); return nil }
 		}
-		if m.permission != nil {
-			if k == "pgup" || k == "pgdown" {
-				m.scrollInteraction(k)
-				return m, nil
-			}
-			return m, m.permissionKey(k)
+		if m.input.Value() != "" {
+			m.input.Reset()
+			m.completion = nil
+			m.status = "Draft cleared"
+			return nil
 		}
-		if m.elicitation != nil {
-			if k == "pgup" || k == "pgdown" {
-				m.scrollInteraction(k)
-				return m, nil
-			}
-			return m, m.elicitationKey(msg)
+		if time.Since(m.exitArmed) < 2*time.Second {
+			return m.quit()
 		}
-		if m.confirm != nil {
-			if k == "esc" || k == "n" {
-				m.confirm = nil
-				return m, nil
-			}
-			if k == "y" {
-				s, local, c := *m.confirm, m.localDelete, m.client
-				m.confirm = nil
-				m.page = "chat"
-				return m, m.perform("Deleting session…", func() error { return c.Delete(s, local) })
-			}
-			return m, nil
+		m.exitArmed = time.Now()
+		m.status = "Press Ctrl+C again to exit"
+		return nil
+	}
+	if m.permission != nil {
+		if k == "pgup" || k == "pgdown" {
+			m.scrollInteraction(k)
+			return nil
 		}
-		if k == "esc" {
-			if m.prompting && m.client != nil {
-				c := m.client
-				m.status = "Cancelling…"
-				return m, func() tea.Msg { _ = c.Cancel(); return nil }
-			}
-			if m.page != "chat" && m.picker.FilterState() != list.Filtering {
-				m.page = "chat"
-				return m, nil
-			}
+		return m.permissionKey(k)
+	}
+	if m.elicitation != nil {
+		if k == "pgup" || k == "pgdown" {
+			m.scrollInteraction(k)
+			return nil
 		}
+		return m.elicitationKey(msg)
+	}
+	if m.confirm != nil {
+		if k == "esc" || k == "n" {
+			m.confirm = nil
+		}
+		if k == "y" {
+			s, local, c := *m.confirm, m.localDelete, m.client
+			m.confirm = nil
+			return m.perform("Deleting session", func() error { return c.Delete(s, local) })
+		}
+		return nil
+	}
+	if m.picker != nil {
+		return m.pickerKey(msg)
+	}
+	if m.page == "info" || m.page == "details" {
+		if k == "esc" || k == "ctrl+o" {
+			m.page = "chat"
+			return nil
+		}
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		return cmd
+	}
+	if handled, cmd := m.completionKey(msg); handled {
+		return cmd
+	}
+	switch k {
+	case "ctrl+d":
+		if m.input.Value() == "" && !m.busy {
+			return m.quit()
+		}
+	case "esc":
+		if m.prompting && m.client != nil {
+			m.queuePaused = true
+			c := m.client
+			m.status = "Stopping"
+			return func() tea.Msg { _ = c.Cancel(); return nil }
+		}
+	case "ctrl+o":
+		return m.command("/details")
+	case "ctrl+p":
+		m.openCommands()
+		return nil
+	case "ctrl+g":
 		if !m.busy {
-			switch k {
-			case "ctrl+g":
-				m.openPicker("agents", m.agents)
-				return m, nil
-			case "ctrl+s":
-				return m, m.command("/sessions")
-			case "ctrl+n":
-				return m, m.command("/new")
-			case "ctrl+p":
-				m.openCommands()
-				return m, nil
-			}
+			m.openPicker("agents", m.agents)
 		}
-		if m.page == "info" {
-			if k == "esc" || k == "enter" {
-				m.page = "chat"
-				m.renderTranscript(true)
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
+		return nil
+	case "ctrl+s":
+		if !m.busy {
+			return m.command("/sessions")
 		}
-		if m.page == "agents" || m.page == "sessions" || m.page == "commands" || m.page == "settings" || m.page == "choices" || m.page == "files" || m.page == "auth" {
-			if m.busy {
-				return m, nil
-			}
-			if k == "enter" && m.picker.FilterState() != list.Filtering {
-				if selected, ok := m.picker.SelectedItem().(item); ok {
-					switch m.page {
-					case "agents":
-						return m, m.connect(selected)
-					case "auth":
-						return m, m.authenticate(selected.id)
-					case "sessions":
-						s, c := selected.value.(store.Session), m.client
-						m.resumeTarget = &s
-						m.page = "chat"
-						return m, m.perform("Loading session…", func() error { return c.Load(s) })
-					case "commands":
-						m.page = "chat"
-						m.input.SetValue(selected.id)
-						m.input.CursorEnd()
-						return m, nil
-					case "settings":
-						m.chooseSetting(selected.value.(client.Selector))
-						return m, nil
-					case "choices":
-						c, id, value := m.client, m.selector.ID, selected.id
-						m.page = "chat"
-						return m, m.perform("Updating "+m.selector.Name+"…", func() error { return c.SetConfig(id, value) })
-					case "files":
-						m.page = "chat"
-						m.input.SetValue(m.filePrefix + quoteReference(selected.id) + " ")
-						m.input.CursorEnd()
-						return m, nil
-					}
-				}
-			}
-			if k == "ctrl+d" && m.page == "sessions" {
-				if selected, ok := m.picker.SelectedItem().(item); ok {
-					s := selected.value.(store.Session)
-					m.confirm = &s
-					m.localDelete = !m.client.CanDelete()
-				}
-				return m, nil
-			}
-			var cmd tea.Cmd
-			m.picker, cmd = m.picker.Update(msg)
-			return m, cmd
+		return nil
+	case "ctrl+n":
+		if !m.busy {
+			return m.command("/new")
 		}
-		if k == "pgup" || k == "pgdown" || k == "ctrl+up" || k == "ctrl+down" {
-			var cmd tea.Cmd
-			m.viewport, cmd = m.viewport.Update(msg)
-			return m, cmd
-		}
-		if k == "tab" && strings.HasPrefix(m.input.Value(), "/") {
-			for _, c := range m.allCommands() {
-				if strings.HasPrefix(c.id, m.input.Value()) {
-					m.input.SetValue(c.id)
-					m.input.CursorEnd()
-					break
-				}
-			}
-			return m, nil
-		}
-		if k == "tab" && strings.Contains(m.input.Value(), "@") && !m.busy {
-			return m, m.findFiles()
-		}
-		if (k == "alt+up" || (k == "up" && m.input.Line() == 0)) && len(m.history) > 0 {
+		return nil
+	case "alt+up", "up":
+		if (k == "alt+up" || m.input.Line() == 0) && len(m.history) > 0 {
 			if m.historyIndex == len(m.history) {
 				m.draft = m.input.Value()
 			}
 			m.historyIndex = max(0, m.historyIndex-1)
 			m.input.SetValue(m.history[m.historyIndex])
-			m.input.CursorEnd()
-			return m, nil
+			m.input.MoveToEnd()
+			return nil
 		}
-		if (k == "alt+down" || k == "down") && m.historyIndex < len(m.history) {
+	case "alt+down", "down":
+		if m.historyIndex < len(m.history) && (k == "alt+down" || m.input.Line() == m.input.LineCount()-1) {
 			m.historyIndex++
 			if m.historyIndex == len(m.history) {
 				m.input.SetValue(m.draft)
 			} else {
 				m.input.SetValue(m.history[m.historyIndex])
 			}
-			m.input.CursorEnd()
-			return m, nil
+			m.input.MoveToEnd()
+			return nil
 		}
-		if k == "enter" && !m.busy {
-			text := strings.TrimSpace(m.input.Value())
-			if text == "" && len(m.attachments) == 0 && len(m.resources) == 0 {
-				return m, nil
-			}
+	case "enter":
+		text := strings.TrimSpace(m.input.Value())
+		if text == "" && len(m.attachments) == 0 && len(m.resources) == 0 {
+			return nil
+		}
+		if strings.HasPrefix(text, "/") {
 			m.input.Reset()
-			if strings.HasPrefix(text, "/") {
-				return m, m.command(text)
-			}
-			if m.client == nil {
-				m.lastError = "Choose an agent with /agents first"
-				m.input.SetValue(text)
-				return m, nil
-			}
-			return m, m.sendPrompt(text)
+			return m.command(text)
 		}
+		return m.sendPrompt(text)
 	}
-	if m.elicitation != nil {
-		if m.permission != nil {
-			return m, nil
-		}
-		var cmd tea.Cmd
-		m.elicitation.input, cmd = m.elicitation.input.Update(msg)
-		return m, cmd
-	}
-	if m.permission != nil || m.confirm != nil {
-		return m, nil
-	}
-	switch m.page {
-	case "agents", "sessions", "commands", "settings", "choices", "files", "auth":
-		var cmd tea.Cmd
-		m.picker, cmd = m.picker.Update(msg)
-		return m, cmd
-	}
-	if m.page == "chat" {
-		var cmd tea.Cmd
-		switch msg.(type) {
-		case tea.MouseWheelMsg:
-			m.viewport, cmd = m.viewport.Update(msg)
-		default:
-			m.input, cmd = m.input.Update(msg)
-		}
-		return m, cmd
-	}
-	return m, nil
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return cmd
 }
-
+func (m *model) rebuildHistory() {
+	if m.client == nil {
+		return
+	}
+	s, _ := m.client.Snapshot()
+	m.history = nil
+	for _, entry := range s.Messages {
+		if entry.Role == "user" {
+			text := entry.Text
+			if len(entry.Content) > 0 && entry.Content[0].Text != nil {
+				text = entry.Content[0].Text.Text
+			}
+			m.history = append(m.history, text)
+		}
+	}
+	m.historyIndex = len(m.history)
+}
 func (m *model) nextPermission() {
 	for m.permission == nil && len(m.permissionQueue) > 0 {
 		p := m.permissionQueue[0]
@@ -624,7 +626,7 @@ func (m *model) nextPermission() {
 		}
 		m.permission = &p
 		m.interactionOffset = 0
-		m.permissionChoice = len(p.Request.Options) // Default to cancel, never approval.
+		m.permissionChoice = len(p.Request.Options)
 	}
 }
 func (m *model) permissionKey(k string) tea.Cmd {
@@ -647,4 +649,52 @@ func (m *model) permissionKey(k string) tea.Cmd {
 		m.nextPermission()
 	}
 	return nil
+}
+func (m *model) scrollInteraction(k string) {
+	if k == "pgup" {
+		m.interactionOffset = max(0, m.interactionOffset-5)
+	} else {
+		m.interactionOffset += 5
+	}
+}
+func (m *model) queueOutput(s string) {
+	if strings.TrimSpace(s) != "" {
+		m.printQueue = append(m.printQueue, s)
+	}
+}
+func (m *model) flushOutput() tea.Cmd {
+	if m.printing || len(m.printQueue) == 0 {
+		return nil
+	}
+	text := strings.Join(m.printQueue, "\n")
+	m.printQueue = nil
+	m.printing = true
+	return tea.Sequence(tea.Println(text), func() tea.Msg { return printedMsg{} })
+}
+func (m *model) startPrompt(q queuedPrompt) tea.Cmd {
+	c := m.client
+	m.busy = true
+	m.prompting = true
+	m.startedAt = time.Now()
+	m.retryOperation = nil
+	m.lastError = ""
+	m.status = "Working"
+	m.draft = ""
+	return func() tea.Msg {
+		reason, err := c.PromptContent(q.blocks)
+		return resultMsg{status: "Ready", err: err, reason: reason, prompt: true}
+	}
+}
+
+func (m *model) sendQueued() tea.Cmd {
+	q := m.queued[0]
+	s, _ := m.client.Snapshot()
+	if q.sessionID != s.ID {
+		m.queuePaused = true
+		m.lastError = "Queued prompts belong to another session. Resume it or use /queue to edit them."
+		return nil
+	}
+	m.queued = m.queued[1:]
+	m.queuePaused = false
+	return m.startPrompt(q)
 }
