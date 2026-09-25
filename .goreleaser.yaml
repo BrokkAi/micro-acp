@@ -1,0 +1,44 @@
+version: 2
+project_name: micro-acp
+
+builds:
+  - id: micro-acp
+    main: .
+    binary: micro-acp
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - docs/acp-support.md
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  sort: asc
+
+release:
+  github:
+    owner: BrokkAi
+    name: micro-acp
+  prerelease: auto
+  make_latest: auto

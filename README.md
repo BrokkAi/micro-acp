@@ -1,12 +1,17 @@
 # micro-acp
 
+[![CI](https://github.com/BrokkAi/micro-acp/actions/workflows/ci.yml/badge.svg)](https://github.com/BrokkAi/micro-acp/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 A small, entirely Go terminal client for [Agent Client Protocol](https://agentclientprotocol.com/). Built on [BrokkAi/acp-go](https://github.com/BrokkAi/acp-go), Bubble Tea v2, Bubbles v2, Lip Gloss v2, and Glamour v2.
 
 A conversation and a growing prompt in your normal terminal. Type `/` for inline command suggestions or `@` to search workspace files. Completed output stays in terminal scrollback; mouse selection and copying keep working. Choose models and modes, inspect tools and diffs, answer permission and input requests, and manage sessions from the prompt. See the [ACP support matrix](docs/acp-support.md) for protocol coverage and limitations.
 
 ## Run
 
-Requires **Go 1.27.1 or newer**, matching `acp-go`'s toolchain requirement. Linux and macOS are the supported targets.
+Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
+
+Building from source requires **Go 1.27.1 or newer**, matching `acp-go`'s toolchain requirement:
 
 ```sh
 go build -o bin/micro-acp .
@@ -107,7 +112,7 @@ Native session operations depend on the agent's advertised capabilities. A conte
 
 ## Models, tools, and context
 
-The persistent status line below the prompt shows the connected agent and current session configuration: model, reasoning, mode, custom values, and explicit On/Off toggles. Reported context usage and cost follow the settings. It stays visible while composing, running a turn, or displaying an error. It wraps to two lines when needed; `+N more · /config` indicates fields that do not fit.
+The persistent status line below the prompt shows compact values for the connected agent, model, reasoning, mode, and custom settings. A green `✓` marks enabled toggles; a muted `○` marks disabled ones. Reported context appears as the percentage remaining, followed by cost when available. Colors adapt to light and dark terminals. The line stays visible while composing, running a turn, or displaying an error. It wraps to two lines when needed; `+N more · /config` indicates fields that do not fit. Full option names and On/Off values remain available in `/config`.
 
 `/config` opens all agent-provided session options with their current values; `/settings` is an alias. Type `/config ` to complete an option ID, then its offered values. `/config <id>` opens that option, and `/config <id> <value>` sets it directly. For example, the demo accepts `/config stream false`. The options come from ACP, including arbitrary categories, grouped choices, and booleans. Open selectors and suggestions refresh when the agent updates its configuration.
 
@@ -195,3 +200,27 @@ Tests require no external agents, model accounts, or internet access once Go dep
 A separate manual check on 2026-09-25 connected to registry `codex-acp` 1.13.1 with an existing login, selected model/mode menus, attached a file, completed a real file edit, expanded its tool diff, and browsed sessions. That is one live adapter check, not a compatibility claim for every registry agent.
 
 The implementation is split into `internal/client` (ACP and process lifecycle), `internal/registry` (discovery/install), `internal/store` (sessions), `internal/config`, `internal/forms`, `internal/tui`, and `internal/demo`.
+
+## Releases
+
+CI checks formatting, dependency integrity, vet, race-enabled tests, and builds on Linux and macOS. It also builds all four release archives with GoReleaser, verifies their checksums, and runs the packaged Linux executable without publishing anything.
+
+To publish a version, tag the intended commit after the workflow files have been pushed:
+
+```sh
+git tag -a v0.1.0 -m "Release v0.1.0"
+git push origin v0.1.0
+```
+
+The release workflow reruns CI against that exact tag, then publishes the archives, checksums, and release notes to GitHub Releases. Tags must use semantic versions with a `v` prefix. Tags such as `v0.2.0-rc.1` create prereleases. Publishing uses the repository's built-in `GITHUB_TOKEN`; no extra release secret is needed.
+
+With GoReleaser v2.18.2 installed, test the same packaging locally:
+
+```sh
+goreleaser check
+goreleaser release --snapshot --clean --skip=publish
+```
+
+## License
+
+[MIT](LICENSE), copyright 2026 BrokkAi contributors.
