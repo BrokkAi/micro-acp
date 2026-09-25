@@ -81,7 +81,7 @@ func TestConfigurationStatusPersistsDuringWorkAndErrors(t *testing.T) {
 			m.lastError = "test error"
 		}
 		view := m.View().Content
-		for _, want := range []string{"demo", "Demo response Walkthrough", "Stream words On", "/config"} {
+		for _, want := range []string{"demo", "Walkthrough", "✓ Stream words", "/config"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%s lost %q:\n%s", state, want, view)
 			}
@@ -90,17 +90,28 @@ func TestConfigurationStatusPersistsDuringWorkAndErrors(t *testing.T) {
 }
 
 func TestConfigurationStatusResponsiveAndExplicitOverflow(t *testing.T) {
-	fields := []string{"Model Example", "Reasoning High", "Mode Ask", "Review On", "Streaming Off", "Custom Fast"}
+	m := composer(t)
+	fields := []client.StatusField{
+		{Name: "Model", Value: "Example", Category: "model"},
+		{Name: "Reasoning", Value: "High", Category: "thought_level"},
+		{Name: "Mode", Value: "Ask", Category: "mode"},
+		{Name: "Review", Value: "On", Boolean: true, Enabled: true},
+		{Name: "Streaming", Value: "Off", Boolean: true},
+		{Name: "Custom", Value: "Fast"},
+	}
 	for _, width := range []int{31, 76, 116} {
-		view := configurationStatus("agent", fields, width)
+		view := m.configurationStatus("agent", fields, width)
 		if lipgloss.Width(view) > width || lipgloss.Height(view) > 2 || !strings.Contains(view, "/config") {
 			t.Fatalf("status does not fit %d:\n%s", width, view)
 		}
 		if width == 31 && !strings.Contains(view, "more") {
 			t.Fatal("overflow was silently hidden")
 		}
-		if width == 116 && (!strings.Contains(view, "Review On") || !strings.Contains(view, "Streaming Off") || !strings.Contains(view, "Custom Fast")) {
+		if width == 116 && (!strings.Contains(view, "✓ Review") || !strings.Contains(view, "○ Streaming") || !strings.Contains(view, "Fast")) {
 			t.Fatal("nonstandard settings missing")
+		}
+		if strings.Contains(view, "Model Example") || strings.Contains(view, "Reasoning High") || strings.Contains(view, "Mode Ask") {
+			t.Fatal("redundant status labels remain")
 		}
 	}
 }

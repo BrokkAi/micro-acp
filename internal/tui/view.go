@@ -14,14 +14,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-var (
-	plain  = lipgloss.NewStyle()
-	accent = lipgloss.NewStyle().Foreground(lipgloss.Color("#BB9AF7"))
-	mint   = lipgloss.NewStyle().Foreground(lipgloss.Color("#9ECE6A"))
-	muted  = lipgloss.NewStyle().Foreground(lipgloss.Color("#8993AE"))
-	danger = lipgloss.NewStyle().Foreground(lipgloss.Color("#F7768E"))
-)
-
 func clean(s string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) && r != '\n' && r != '\t' {
@@ -33,7 +25,7 @@ func clean(s string) string {
 func line(s string, width int) string {
 	return ansi.Truncate(strings.ReplaceAll(clean(s), "\n", " "), max(1, width), "…")
 }
-func cropLines(s string, height int, tail bool) string {
+func (m *model) cropLines(s string, height int, tail bool) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if height <= 1 {
 		if tail {
@@ -45,13 +37,13 @@ func cropLines(s string, height int, tail bool) string {
 		return strings.Join(lines, "\n")
 	}
 	if tail {
-		return muted.Render("  … Ctrl+O for full output") + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
+		return m.theme.muted.Render("  … Ctrl+O for full output") + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
 	}
-	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + muted.Render("… /logs for details")
+	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.muted.Render("… /logs for details")
 }
-func suggestionRows(entries []item, index, width, limit int, commands bool) string {
+func (m *model) suggestionRows(entries []item, index, width, limit int, commands bool) string {
 	if len(entries) == 0 {
-		return muted.Render("  No matches")
+		return m.theme.muted.Render("  No matches")
 	}
 	start := max(0, index-limit/2)
 	start = min(start, max(0, len(entries)-limit))
@@ -69,23 +61,23 @@ func suggestionRows(entries []item, index, width, limit int, commands bool) stri
 		style := plain
 		if i == index {
 			prefix = "› "
-			style = accent.Bold(true)
+			style = m.theme.selection
 		}
 		if description == "" {
 			label = line(label, width-2)
 		} else {
 			label = line(label, labelWidth)
 		}
-		row := prefix + label
+		row := style.Render(prefix + label)
 		if description != "" && width > 42 {
-			row += strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(label)+2)) + line(description, max(1, width-labelWidth-4))
+			row += strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(label)+2)) + m.theme.muted.Render(line(description, max(1, width-labelWidth-4)))
 		} else if width <= 42 {
-			row = prefix + line(label, width-2)
+			row = style.Render(prefix + line(label, width-2))
 		}
-		rows = append(rows, style.Render(row))
+		rows = append(rows, row)
 	}
 	if len(entries) > limit {
-		rows = append(rows, muted.Render(fmt.Sprintf("  %d/%d", index+1, len(entries))))
+		rows = append(rows, m.theme.muted.Render(fmt.Sprintf("  %d/%d", index+1, len(entries))))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -105,15 +97,15 @@ func (m *model) completionView(height int) string {
 	if c.title != "" {
 		label = c.title
 	}
-	body := muted.Render(line(label, w)) + "\n"
+	body := m.theme.muted.Render(line(label, w)) + "\n"
 	if c.kind == "files" && m.filesLoading {
-		body += muted.Render("  Finding workspace files…")
+		body += m.theme.muted.Render("  Finding workspace files…")
 	} else if c.kind == "files" && m.filesError != "" {
-		body += danger.Render(line(m.filesError, w))
+		body += m.theme.danger.Render(line(m.filesError, w))
 	} else {
-		body += suggestionRows(c.entries, c.index, w, min(5, max(1, height-3)), c.kind == "commands")
+		body += m.suggestionRows(c.entries, c.index, w, min(5, max(1, height-3)), c.kind == "commands")
 	}
-	return body + "\n" + muted.Render(line("↑↓ navigate · Tab complete · Enter select · Esc dismiss", w))
+	return body + "\n" + m.theme.muted.Render(line("↑↓ navigate · Tab complete · Enter select · Esc dismiss", w))
 }
 func (m *model) pickerView(height int) string {
 	p := m.picker
@@ -122,12 +114,12 @@ func (m *model) pickerView(height int) string {
 	if p.kind == "agents" && m.catalogLoading {
 		title += " · updating registry"
 	}
-	result := accent.Bold(true).Render(line(title, w)) + "\n" + p.input.View() + "\n" + suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
+	result := m.theme.accent.Bold(true).Render(line(title, w)) + "\n" + p.input.View() + "\n" + m.suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
 	hint := "↑↓ navigate · Enter select · Esc back"
 	if p.kind == "sessions" {
 		hint += " · Ctrl+D delete"
 	}
-	return result + "\n" + muted.Render(line(hint, w))
+	return result + "\n" + m.theme.muted.Render(line(hint, w))
 }
 func (m *model) permissionView(height int) string {
 	p := m.permission
@@ -143,12 +135,12 @@ func (m *model) permissionView(height int) string {
 		choices = append(choices, item{title: o.Name})
 	}
 	choices = append(choices, item{title: "Cancel"})
-	options := suggestionRows(choices, m.permissionChoice, w, min(len(choices), max(1, height-5)), false)
+	options := m.suggestionRows(choices, m.permissionChoice, w, min(len(choices), max(1, height-5)), false)
 	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(details)), 6, max(1, height-lipgloss.Height(options)-2))))
 	v.SetContent(details)
 	v.SetYOffset(m.interactionOffset)
-	body := accent.Bold(true).Render(line(title, w)) + "\n" + v.View() + "\n"
-	body += options + "\n" + muted.Render(line("↑↓ choose · Enter confirm · Esc cancel · PgUp/PgDn details", w))
+	body := m.theme.accent.Bold(true).Render(line(title, w)) + "\n" + v.View() + "\n"
+	body += options + "\n" + m.theme.muted.Render(line("↑↓ choose · Enter confirm · Esc cancel · PgUp/PgDn details", w))
 	return body
 }
 func (m *model) View() tea.View {
@@ -163,39 +155,39 @@ func (m *model) View() tea.View {
 		if value == "" {
 			value = m.input.Placeholder
 		}
-		inputView = muted.Render(line("❯ "+value, w))
+		inputView = m.theme.muted.Render(line("❯ "+value, w))
 	}
 	var statusParts []string
 	if m.busy && !modal {
 		elapsed := time.Since(m.startedAt).Round(time.Second)
-		statusParts = append(statusParts, m.spinner.View()+" "+muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
+		statusParts = append(statusParts, m.spinner.View()+" "+m.theme.muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
 	}
 	if !m.busy && m.status != "" && m.status != "Ready" && m.lastError == "" {
-		statusParts = append(statusParts, muted.Render(line(m.status, w)))
+		statusParts = append(statusParts, m.theme.muted.Render(line(m.status, w)))
 	}
 	if m.lastError != "" {
-		statusParts = append(statusParts, danger.Render(cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
+		statusParts = append(statusParts, m.theme.danger.Render(m.cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
 	}
 	var badges []string
 	if !modal {
 		if n := len(m.attachments) + len(m.resources); n > 0 {
-			badges = append(badges, muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
+			badges = append(badges, m.theme.muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
 		}
 		if len(m.queued) > 0 {
 			hint := fmt.Sprintf("%d queued · /queue to edit", len(m.queued))
 			if m.queuePaused {
 				hint += " · /queue send to continue"
 			}
-			badges = append(badges, muted.Render(line(hint, w)))
+			badges = append(badges, m.theme.muted.Render(line(hint, w)))
 		}
 	}
 	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
 	if m.prompting && m.input.Value() != "" {
 		footer = "Enter queue prompt · Esc stop · Alt+Enter newline"
 	}
-	footer = muted.Render(line(footer, w))
+	footer = m.theme.muted.Render(line(footer, w))
 	if m.client != nil {
-		footer = muted.Render(configurationStatus(m.client.Agent, m.client.StatusFields(), w)) + "\n" + footer
+		footer = m.configurationStatus(m.client.Agent, m.client.StatusFields(), w) + "\n" + footer
 	}
 	baseHeight := lipgloss.Height(inputView) + 2 + lipgloss.Height(footer)
 	for _, part := range append(append([]string{}, statusParts...), badges...) {
@@ -213,7 +205,7 @@ func (m *model) View() tea.View {
 		if m.localDelete {
 			action = "Remove this session from local history?"
 		}
-		panel = danger.Render(ansi.Hardwrap(action, w, true)) + "\n" + line(m.confirm.Title, w) + "\n" + muted.Render("y delete · n / Esc keep")
+		panel = m.theme.danger.Render(ansi.Hardwrap(action, w, true)) + "\n" + line(m.confirm.Title, w) + "\n" + m.theme.muted.Render("y delete · n / Esc keep")
 	case m.page == "details" || m.page == "info" || m.authWaiting:
 		title := "Details"
 		if m.authWaiting {
@@ -225,7 +217,7 @@ func (m *model) View() tea.View {
 		if bottom {
 			v.GotoBottom()
 		}
-		panel = accent.Render(title) + "\n" + v.View() + "\n" + muted.Render("PgUp/PgDn scroll · Esc back")
+		panel = m.theme.accent.Render(title) + "\n" + v.View() + "\n" + m.theme.muted.Render("PgUp/PgDn scroll · Esc back")
 	case m.picker != nil:
 		panel = m.pickerView(panelHeight)
 	case m.completion != nil:
@@ -240,20 +232,20 @@ func (m *model) View() tea.View {
 	}
 	if m.live != "" && !modal && m.height > overhead {
 		available := m.height - overhead
-		parts = append(parts, cropLines(m.live, available, true))
+		parts = append(parts, m.cropLines(m.live, available, true))
 	}
 	parts = append(parts, statusParts...)
 	if panel != "" {
 		parts = append(parts, panel)
 	}
 	parts = append(parts, badges...)
-	parts = append(parts, muted.Render(strings.Repeat("─", w)))
+	parts = append(parts, m.theme.rule.Render(strings.Repeat("─", w)))
 	before := strings.Join(parts, "\n")
 	inputY := 0
 	if before != "" {
 		inputY = lipgloss.Height(before)
 	}
-	parts = append(parts, inputView, muted.Render(strings.Repeat("─", w)))
+	parts = append(parts, inputView, m.theme.rule.Render(strings.Repeat("─", w)))
 	parts = append(parts, footer)
 	content := strings.Join(parts, "\n")
 	v := tea.NewView(lipgloss.NewStyle().PaddingLeft(1).Render(content))

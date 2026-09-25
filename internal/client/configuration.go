@@ -158,10 +158,16 @@ func (c *Client) SetConfig(id, value string) error {
 	return fmt.Errorf("agent did not confirm %s = %s", selected.Name, value)
 }
 
-// StatusFields includes every advertised setting, including custom categories
-// and explicit Off values. Categories only determine the display order.
-func (c *Client) StatusFields() []string {
-	var values []string
+type StatusField struct {
+	Name, Value, Category string
+	Boolean, Enabled      bool
+	Used, Capacity        uint64
+}
+
+// StatusFields keeps presentation metadata separate from values so the TUI can
+// use compact, semantic styling without parsing display strings.
+func (c *Client) StatusFields() []StatusField {
+	var values []StatusField
 	selectors := c.Selectors()
 	rank := func(s Selector) int {
 		switch s.Category {
@@ -183,16 +189,22 @@ func (c *Client) StatusFields() []string {
 				name = o.Name
 			}
 		}
-		values = append(values, s.Name+" "+name)
+		values = append(values, StatusField{Name: s.Name, Value: name, Category: s.Category, Boolean: s.Boolean, Enabled: s.Current == "true"})
 	}
 	s, _ := c.Snapshot()
 	if s.Usage != nil {
-		values = append(values, fmt.Sprintf("%d/%d tokens", s.Usage.Used, s.Usage.Size))
+		values = append(values, StatusField{Value: fmt.Sprintf("%d/%d tokens", s.Usage.Used, s.Usage.Size), Category: "usage", Used: uint64(s.Usage.Used), Capacity: uint64(s.Usage.Size)})
 		if s.Usage.Cost != nil {
-			values = append(values, fmt.Sprintf("%.4f %s", s.Usage.Cost.Amount, s.Usage.Cost.Currency))
+			values = append(values, StatusField{Value: fmt.Sprintf("%.4f %s", s.Usage.Cost.Amount, s.Usage.Cost.Currency), Category: "cost"})
 		}
 	}
 	return values
 }
 
-func (c *Client) Status() string { return strings.Join(c.StatusFields(), " · ") }
+func (c *Client) Status() string {
+	var fields []string
+	for _, f := range c.StatusFields() {
+		fields = append(fields, strings.TrimSpace(f.Name+" "+f.Value))
+	}
+	return strings.Join(fields, " · ")
+}

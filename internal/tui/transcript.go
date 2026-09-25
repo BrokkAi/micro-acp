@@ -16,7 +16,11 @@ func (m *model) markdown(text string) string {
 	if cached, ok := m.renderCache[key]; ok {
 		return cached
 	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(width), glamour.WithPreservedNewLines())
+	style := "dark"
+	if !m.theme.dark {
+		style = "light"
+	}
+	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width), glamour.WithPreservedNewLines())
 	rendered := ""
 	if err == nil {
 		rendered, err = renderer.Render(clean(text))
@@ -43,15 +47,15 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 		if text == "" {
 			text = "Attached context"
 		}
-		result := accent.Render("❯ ") + strings.ReplaceAll(ansi.Wrap(text, max(10, width-2), ""), "\n", "\n  ")
+		result := m.theme.accent.Render("❯ ") + strings.ReplaceAll(ansi.Wrap(text, max(10, width-2), ""), "\n", "\n  ")
 		if len(message.Content) > 1 {
-			result += "\n" + muted.Render(fmt.Sprintf("  %d attachment(s)", len(message.Content)-1))
+			result += "\n" + m.theme.muted.Render(fmt.Sprintf("  %d attachment(s)", len(message.Content)-1))
 		}
 		return result + "\n"
 	case "assistant":
 		prefix := ""
 		if !continuation {
-			prefix = mint.Render("● ")
+			prefix = m.theme.mint.Render("● ")
 		}
 		return prefix + m.markdown(text) + "\n"
 	case "tool":
@@ -65,14 +69,14 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 			title = strings.Split(text, "\n")[0]
 		}
 		mark := "◦"
-		style := muted
+		style := m.theme.muted
 		if status == "completed" {
 			mark = "✓"
-			style = mint
+			style = m.theme.mint
 		}
 		if status == "failed" {
 			mark = "×"
-			style = danger
+			style = m.theme.danger
 		}
 		summary := style.Render(mark+" ") + line(title, width-2)
 		if details {
@@ -86,30 +90,30 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 					if d.OldText == nil {
 						label = "created"
 					}
-					summary += "\n" + muted.Render(line("  "+d.Path+" · "+label+" · Ctrl+O for diff", width))
+					summary += "\n" + m.theme.muted.Render(line("  "+d.Path+" · "+label+" · Ctrl+O for diff", width))
 				}
 			}
 		}
 		return summary
 	case "thought":
 		if details {
-			return muted.Render("Thinking\n"+ansi.Hardwrap(text, width, true)) + "\n"
+			return m.theme.muted.Render("Thinking\n"+ansi.Hardwrap(text, width, true)) + "\n"
 		}
-		return muted.Render("· Thinking  " + line(strings.Join(strings.Fields(text), " "), max(10, width-13)))
+		return m.theme.muted.Render("· Thinking  " + line(strings.Join(strings.Fields(text), " "), max(10, width-13)))
 	case "terminal":
 		if details {
-			return muted.Render("Terminal\n") + ansi.Hardwrap(text, width, true) + "\n"
+			return m.theme.muted.Render("Terminal\n") + ansi.Hardwrap(text, width, true) + "\n"
 		}
 		lines := strings.Split(text, "\n")
-		summary := muted.Render("$ " + line(lines[0], width-2))
+		summary := m.theme.muted.Render("$ " + line(lines[0], width-2))
 		if len(lines) > 1 {
-			summary += "\n" + muted.Render("  "+line(lines[len(lines)-1], width-2))
+			summary += "\n" + m.theme.muted.Render("  "+line(lines[len(lines)-1], width-2))
 		}
 		return summary
 	case "plan":
-		return muted.Render("Plan\n" + ansi.Hardwrap(text, width, true))
+		return m.theme.muted.Render("Plan\n" + ansi.Hardwrap(text, width, true))
 	default:
-		return muted.Render(ansi.Hardwrap(text, width, true))
+		return m.theme.muted.Render(ansi.Hardwrap(text, width, true))
 	}
 }
 
@@ -159,7 +163,7 @@ func (m *model) syncTranscript() {
 		if s.ParentID != "" {
 			label += " · fork"
 		}
-		m.queueOutput(muted.Render(line(label, m.width-4)) + "\n")
+		m.queueOutput(m.theme.muted.Render(line(label, m.width-4)) + "\n")
 	}
 	if m.page == "details" {
 		m.refreshDetails()

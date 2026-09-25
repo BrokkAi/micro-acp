@@ -64,6 +64,7 @@ type queuedPrompt struct {
 }
 
 type model struct {
+	theme                      palette
 	ctx                        context.Context
 	options                    Options
 	registry                   registry.Client
@@ -129,6 +130,7 @@ func Run(ctx context.Context, options Options) error {
 	return err
 }
 func newModel(ctx context.Context, options Options) *model {
+	p := newPalette(true)
 	input := textarea.New()
 	input.Placeholder = "Ask anything…  / commands · @ files"
 	input.Prompt = "❯ "
@@ -144,18 +146,19 @@ func newModel(ctx context.Context, options Options) *model {
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
 	styles := input.Styles()
 	styles.Focused.CursorLine = plain
-	styles.Focused.Prompt = accent
-	styles.Focused.Placeholder = muted
+	styles.Focused.Prompt = p.accent
+	styles.Focused.Placeholder = p.muted
 	input.SetStyles(styles)
 	s := spinner.New()
 	s.Spinner = spinner.Dot
-	s.Style = accent
+	s.Style = p.accent
 	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
 	m.rebuildAgents()
+	m.theme = p
 	return m
 }
 func (m *model) Init() tea.Cmd {
-	m.queueOutput(accent.Bold(true).Render("micro-acp") + muted.Render("  ·  "+clean(m.options.Cwd)) + "\n")
+	m.queueOutput(m.theme.accent.Bold(true).Render("micro-acp") + m.theme.muted.Render("  ·  "+clean(m.options.Cwd)) + "\n")
 	cmds := []tea.Cmd{m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation()}
 	if m.options.Agent != "demo" {
 		m.catalogLoading = true
@@ -276,6 +279,8 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		cmd = tea.Batch(cmd, completionCmd, outputCmd)
 	}()
 	switch msg := msg.(type) {
+	case tea.BackgroundColorMsg:
+		m.applyTheme(msg.IsDark())
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.MaxHeight = min(8, max(1, m.height/3))
@@ -305,7 +310,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 		}
 		if m.catalog.Warning != "" {
-			m.queueOutput(muted.Render(ansi.Wrap(clean(m.catalog.Warning), max(10, m.width-4), "")))
+			m.queueOutput(m.theme.muted.Render(ansi.Wrap(clean(m.catalog.Warning), max(10, m.width-4), "")))
 		}
 		if !m.started && m.options.Agent != "" {
 			m.started = true

@@ -265,7 +265,7 @@ func (m *model) elicitationPanel(height int) string {
 				}
 				choices = append(choices, item{title: label})
 			}
-			controls = append(controls, suggestionRows(choices, e.choice, w, min(5, max(1, height-7)), false))
+			controls = append(controls, m.suggestionRows(choices, e.choice, w, min(5, max(1, height-7)), false))
 		} else {
 			controls = append(controls, e.input.View())
 		}
@@ -273,7 +273,7 @@ func (m *model) elicitationPanel(height int) string {
 		if f.Kind == "array" {
 			hint = "Space toggle · " + hint
 		}
-		controls = append(controls, muted.Render(line(hint, w)))
+		controls = append(controls, m.theme.muted.Render(line(hint, w)))
 	} else {
 		if len(e.fields) > 0 {
 			context += "\nReview your responses (Shift+Tab to edit):"
@@ -292,15 +292,15 @@ func (m *model) elicitationPanel(height int) string {
 			}
 			controls = append(controls, line(prefix+text, w))
 		}
-		controls = append(controls, muted.Render(line("Enter confirm · Esc cancel · PgUp/PgDn details", w)))
+		controls = append(controls, m.theme.muted.Render(line("Enter confirm · Esc cancel · PgUp/PgDn details", w)))
 	}
 	if e.err != "" {
-		controls = append(controls, danger.Render(line(e.err, w)))
+		controls = append(controls, m.theme.danger.Render(line(e.err, w)))
 	}
 	body := strings.Join(controls, "\n")
 	context = ansi.Wrap(context, w, "")
 	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(context)), max(1, height-lipgloss.Height(body)-1))))
 	v.SetContent(context)
 	v.SetYOffset(m.interactionOffset)
-	return accent.Bold(true).Render(line("INPUT REQUEST · "+e.event.Agent, w)) + "\n" + v.View() + "\n" + body
+	return m.theme.accent.Bold(true).Render(line("INPUT REQUEST · "+e.event.Agent, w)) + "\n" + v.View() + "\n" + body
 }
