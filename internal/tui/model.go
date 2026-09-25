@@ -13,6 +13,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
@@ -58,38 +59,45 @@ type permissionMsg struct{ permission client.Permission }
 type pulseMsg time.Time
 
 type model struct {
-	ctx              context.Context
-	options          Options
-	registry         registry.Client
-	store            store.Store
-	client           *client.Client
-	catalog          registry.Snapshot
-	agents           []list.Item
-	page             string
-	picker           list.Model
-	input            textarea.Model
-	viewport         viewport.Model
-	spinner          spinner.Model
-	width, height    int
-	busy             bool
-	prompting        bool
-	status           string
-	lastError        string
-	permission       *client.Permission
-	permissionQueue  []client.Permission
-	permissionChoice int
-	confirm          *store.Session
-	localDelete      bool
-	revision         uint64
-	renderCache      map[string]string
-	info             string
-	started          bool
-	selector         client.Selector
-	history          []string
-	historyIndex     int
-	draft            string
-	attachments      []string
-	filePrefix       string
+	ctx               context.Context
+	options           Options
+	registry          registry.Client
+	store             store.Store
+	client            *client.Client
+	catalog           registry.Snapshot
+	agents            []list.Item
+	page              string
+	picker            list.Model
+	input             textarea.Model
+	viewport          viewport.Model
+	spinner           spinner.Model
+	width, height     int
+	busy              bool
+	prompting         bool
+	status            string
+	lastError         string
+	permission        *client.Permission
+	permissionQueue   []client.Permission
+	permissionChoice  int
+	confirm           *store.Session
+	localDelete       bool
+	revision          uint64
+	renderCache       map[string]string
+	info              string
+	started           bool
+	selector          client.Selector
+	history           []string
+	historyIndex      int
+	draft             string
+	attachments       []string
+	filePrefix        string
+	elicitation       *elicitationUI
+	elicitationQueue  []client.Elicitation
+	interactionOffset int
+	retryOperation    func() error
+	authWaiting       bool
+	interactions      client.Interactions
+	resumeTarget      *store.Session
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -125,10 +133,10 @@ func newModel(ctx context.Context, options Options) *model {
 	picker.SetShowTitle(false)
 	picker.SetShowHelp(true)
 	picker.DisableQuitKeybindings()
-	return &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "agents", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(18)), spinner: s, picker: picker, width: 80, height: 30, busy: true, status: "Refreshing the ACP registry…", renderCache: map[string]string{}}
+	return &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "agents", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(18)), spinner: s, picker: picker, width: 80, height: 30, busy: true, status: "Refreshing the ACP registry…", renderCache: map[string]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
 }
 func (m *model) Init() tea.Cmd {
-	return tea.Batch(m.fetchCatalog(), m.spinner.Tick, pulse(), m.input.Focus())
+	return tea.Batch(m.fetchCatalog(), m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation())
 }
 func pulse() tea.Cmd {
 	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return pulseMsg(t) })
@@ -138,10 +146,10 @@ func (m *model) fetchCatalog() tea.Cmd {
 	return func() tea.Msg { s, e := r.Load(ctx, offline); return catalogMsg{s, e} }
 }
 func (m *model) waitPermission() tea.Cmd {
-	c, ctx := m.client, m.ctx
+	requests, ctx := m.interactions.Permissions, m.ctx
 	return func() tea.Msg {
 		select {
-		case p := <-c.Permissions:
+		case p := <-requests:
 			return permissionMsg{p}
 		case <-ctx.Done():
 			return nil
@@ -159,14 +167,20 @@ func (m *model) connect(selected item) tea.Cmd {
 	m.lastError = ""
 	m.status = "Starting " + selected.title + "…"
 	m.page = "chat"
-	ctx, cwd, r, st := m.ctx, m.options.Cwd, m.registry, m.store
+	ctx, cwd, r, st, settings, interactions := m.ctx, m.options.Cwd, m.registry, m.store, m.options.Config.Session, m.interactions
 	old := m.client
 	m.client = nil
 	m.permission = nil
 	m.permissionQueue = nil
+	m.elicitation = nil
+	m.elicitationQueue = nil
+	m.attachments = nil
+	m.retryOperation = nil
 	return func() tea.Msg {
 		if old != nil {
-			old.Close()
+			if err := old.Shutdown(); err != nil {
+				return connectedMsg{err: err}
+			}
 		}
 		var command config.Command
 		switch v := selected.value.(type) {
@@ -179,7 +193,7 @@ func (m *model) connect(selected item) tea.Cmd {
 				return connectedMsg{err: err}
 			}
 		}
-		c, err := client.Open(ctx, selected.id, cwd, command, st)
+		c, err := client.OpenInteractive(ctx, selected.id, cwd, command, st, interactions, settings)
 		return connectedMsg{c, err}
 	}
 }
@@ -187,6 +201,7 @@ func (m *model) perform(status string, fn func() error) tea.Cmd {
 	m.busy = true
 	m.status = status
 	m.lastError = ""
+	m.retryOperation = fn
 	return func() tea.Msg { return resultMsg{status: "Ready", err: fn()} }
 }
 
@@ -195,6 +210,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.SetWidth(max(10, m.width-6))
+		if m.elicitation != nil {
+			m.elicitation.input.SetWidth(max(10, m.width-8))
+		}
 		m.picker.SetSize(max(10, m.width-4), max(4, m.height-10))
 		m.viewport.SetWidth(max(10, m.width-4))
 		m.viewport.SetHeight(max(3, m.height-13))
@@ -259,12 +277,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		if m.options.Resume != nil {
 			s := *m.options.Resume
+			m.resumeTarget = &s
 			m.options.Resume = nil
 			cmd = m.perform("Loading session…", func() error { return c.Load(s) })
 		} else {
 			cmd = m.perform("Creating session…", c.New)
 		}
-		return m, tea.Batch(cmd, m.waitPermission())
+		return m, cmd
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
@@ -272,8 +291,14 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.lastError = msg.err.Error()
 			m.status = "Action failed"
+			if acp.IsAuthRequired(msg.err) {
+				m.openAuth()
+				return m, nil
+			}
 		} else {
 			m.lastError = ""
+			m.retryOperation = nil
+			m.resumeTarget = nil
 		}
 		m.renderTranscript(true)
 		if m.client != nil {
@@ -308,6 +333,38 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.permissionQueue = append(m.permissionQueue, msg.permission)
 		m.nextPermission()
 		return m, m.waitPermission()
+	case elicitationMsg:
+		m.elicitationQueue = append(m.elicitationQueue, msg.event)
+		return m, tea.Batch(m.nextElicitation(), m.waitElicitation())
+	case authDoneMsg:
+		m.authWaiting = false
+		m.busy = false
+		m.page = "chat"
+		if msg.err != nil {
+			m.lastError = msg.err.Error()
+			return m, nil
+		}
+		m.status = "Authenticated"
+		if msg.terminal {
+			c := m.client
+			if m.resumeTarget != nil {
+				m.options.Resume = m.resumeTarget
+			} else if s, _ := c.Snapshot(); s.ID != "" {
+				m.options.Resume = &s
+			}
+			return m, m.connect(item{title: c.Agent, id: c.Agent, value: c.Invocation()})
+		}
+		if m.retryOperation != nil {
+			retry := m.retryOperation
+			return m, m.perform("Continuing…", retry)
+		}
+		if s, _ := m.client.Snapshot(); s.ID == "" {
+			return m, m.perform("Creating session…", m.client.New)
+		}
+	case browserMsg:
+		if msg.err != nil {
+			m.lastError = "Could not open browser: " + msg.err.Error()
+		}
 	case pulseMsg:
 		if m.permission != nil {
 			select {
@@ -316,6 +373,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.nextPermission()
 			default:
 			}
+		}
+		if m.elicitation != nil {
+			select {
+			case <-m.elicitation.event.Done:
+				m.elicitation = nil
+				return m, tea.Batch(m.nextElicitation(), pulse())
+			default:
+			}
+		}
+		if m.authWaiting && m.client != nil {
+			m.viewport.SetContent(clean(m.client.Diagnostics()))
+			m.viewport.GotoBottom()
 		}
 		m.renderTranscript(false)
 		return m, pulse()
@@ -339,7 +408,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.permission != nil {
+			if k == "pgup" || k == "pgdown" {
+				m.scrollInteraction(k)
+				return m, nil
+			}
 			return m, m.permissionKey(k)
+		}
+		if m.elicitation != nil {
+			if k == "pgup" || k == "pgdown" {
+				m.scrollInteraction(k)
+				return m, nil
+			}
+			return m, m.elicitationKey(msg)
 		}
 		if m.confirm != nil {
 			if k == "esc" || k == "n" {
@@ -389,7 +469,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
-		if m.page == "agents" || m.page == "sessions" || m.page == "commands" || m.page == "settings" || m.page == "choices" || m.page == "files" {
+		if m.page == "agents" || m.page == "sessions" || m.page == "commands" || m.page == "settings" || m.page == "choices" || m.page == "files" || m.page == "auth" {
 			if m.busy {
 				return m, nil
 			}
@@ -398,8 +478,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					switch m.page {
 					case "agents":
 						return m, m.connect(selected)
+					case "auth":
+						return m, m.authenticate(selected.id)
 					case "sessions":
 						s, c := selected.value.(store.Session), m.client
+						m.resumeTarget = &s
 						m.page = "chat"
 						return m, m.perform("Loading session…", func() error { return c.Load(s) })
 					case "commands":
@@ -487,6 +570,17 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.sendPrompt(text)
 		}
 	}
+	if m.elicitation != nil {
+		if m.permission != nil {
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.elicitation.input, cmd = m.elicitation.input.Update(msg)
+		return m, cmd
+	}
+	if m.permission != nil || m.confirm != nil {
+		return m, nil
+	}
 	if m.page == "chat" {
 		var cmd tea.Cmd
 		switch msg.(type) {
@@ -510,6 +604,7 @@ func (m *model) nextPermission() {
 		default:
 		}
 		m.permission = &p
+		m.interactionOffset = 0
 		m.permissionChoice = len(p.Request.Options) // Default to cancel, never approval.
 	}
 }

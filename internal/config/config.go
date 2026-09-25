@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/BrokkAi/acp-go/schema"
 )
 
 const RegistryURL = "https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json"
@@ -20,6 +22,12 @@ type Config struct {
 	DefaultAgent string             `json:"default_agent,omitempty"`
 	RegistryURL  string             `json:"registry_url,omitempty"`
 	Agents       map[string]Command `json:"agents,omitempty"`
+	Session      SessionOptions     `json:"session,omitempty"`
+}
+
+type SessionOptions struct {
+	MCPServers            []schema.McpServer `json:"mcp_servers,omitempty"`
+	AdditionalDirectories []string           `json:"additional_directories,omitempty"`
 }
 
 type Paths struct{ Config, Data, Cache string }

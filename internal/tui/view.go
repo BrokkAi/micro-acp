@@ -6,9 +6,12 @@ import (
 	"strings"
 	"unicode"
 
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/BrokkAi/acp-go/schema"
+	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -35,7 +38,7 @@ func line(s string, width int) string {
 }
 
 func (m *model) renderTranscript(force bool) {
-	if m.client == nil || m.page == "info" {
+	if m.client == nil || m.page == "info" || m.authWaiting {
 		return
 	}
 	s, revision := m.client.Snapshot()
@@ -134,9 +137,8 @@ func (m *model) View() tea.View {
 		if p.Request.ToolCall.Title != nil {
 			body += ansi.Hardwrap(clean(*p.Request.ToolCall.Title), w-4, true) + "\n"
 		}
-		if raw := p.Request.ToolCall.RawInput; len(raw) > 0 {
-			body += muted.Render(ansi.Hardwrap(line(string(raw), min(500, w*4)), w-4, true)) + "\n"
-		}
+		tool := schema.ToolCall{ToolCallID: p.Request.ToolCall.ToolCallID, Content: p.Request.ToolCall.Content, RawInput: p.Request.ToolCall.RawInput, Locations: p.Request.ToolCall.Locations}
+		body += ansi.Hardwrap(clean(client.ToolText(tool)), w-4, true) + "\n"
 		body += "\n"
 		for i, opt := range p.Request.Options {
 			prefix := "  "
@@ -150,6 +152,8 @@ func (m *model) View() tea.View {
 			prefix = "› "
 		}
 		body += prefix + "Cancel\n\n" + muted.Render("↑/↓ choose · Enter confirm · Esc cancel")
+	case m.elicitation != nil:
+		body = m.elicitationView()
 	case m.confirm != nil:
 		action := "Delete this session from the agent and local history?"
 		if m.localDelete {
@@ -158,6 +162,10 @@ func (m *model) View() tea.View {
 		body = danger.Bold(true).Render("Delete session") + "\n\n" + ansi.Hardwrap(action, w, true) + "\n\n" + line(m.confirm.Title, w) + "\n" + muted.Render(m.confirm.ID) + "\n\n" + muted.Render("y confirm · n / Esc keep session")
 	case m.page == "agents":
 		body = accent.Bold(true).Render("AGENTS") + muted.Render("  Search with / · Enter connect") + "\n" + m.picker.View()
+	case m.page == "auth":
+		body = accent.Bold(true).Render("AUTHENTICATION") + "\n" + m.picker.View()
+	case m.page == "authwait":
+		body = accent.Bold(true).Render("AUTHENTICATING · agent output") + "\n" + m.viewport.View()
 	case m.page == "sessions":
 		body = accent.Bold(true).Render("SESSIONS") + muted.Render("  "+line(agent, w-12)) + "\n" + m.picker.View()
 	case m.page == "commands":
@@ -172,6 +180,12 @@ func (m *model) View() tea.View {
 		body = accent.Bold(true).Render("AGENT & SESSION") + muted.Render("  Esc back") + "\n" + m.viewport.View()
 	default:
 		body = plain.Bold(true).Render(line(title, w-20)) + muted.Render("  "+sessionID) + "\n" + m.viewport.View()
+	}
+	if m.permission != nil || m.elicitation != nil {
+		v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(max(3, m.height-12)))
+		v.SetContent(body)
+		v.SetYOffset(m.interactionOffset)
+		body = v.View()
 	}
 	body = lipgloss.NewStyle().Width(w).MaxWidth(w).Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
 	status := m.status
@@ -194,10 +208,21 @@ func (m *model) View() tea.View {
 	}
 	prompt := border.Width(m.width - 4).Render(m.input.View())
 	foot := muted.Render(line("Enter send · Alt+Enter newline · Ctrl+P commands · Esc stop · Ctrl+C quit", w))
+	if m.permission != nil || m.elicitation != nil {
+		foot = muted.Render(line("PgUp/PgDn review details · Esc cancel · Ctrl+D decline form", w))
+	}
 	content := lipgloss.NewStyle().Padding(0, 2).Render(header+body+"\n"+status) + "\n" + lipgloss.NewStyle().Padding(0, 1).Render(prompt) + "\n" + lipgloss.NewStyle().Padding(0, 2).Render(foot)
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
 	v.WindowTitle = "micro-acp"
 	return v
+}
+
+func (m *model) scrollInteraction(key string) {
+	if key == "pgup" {
+		m.interactionOffset = max(0, m.interactionOffset-max(3, m.height-14))
+	} else {
+		m.interactionOffset += max(3, m.height-14)
+	}
 }

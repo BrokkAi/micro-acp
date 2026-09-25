@@ -11,6 +11,8 @@ import (
 
 var commands = []item{
 	{title: "New session", description: "Start a fresh conversation", id: "/new"},
+	{title: "Close session", description: "Close the active session while keeping its history", id: "/close"},
+	{title: "Log out", description: "End authentication with the connected agent", id: "/logout"},
 	{title: "Sessions", description: "Browse local and agent sessions", id: "/sessions"},
 	{title: "Agents", description: "Choose a registry or custom agent", id: "/agents"},
 	{title: "Fork session", description: "Create a native branch of the active session", id: "/fork"},
@@ -18,7 +20,7 @@ var commands = []item{
 	{title: "Delete session", description: "Delete the active session from the agent and this client", id: "/delete"},
 	{title: "Forget session locally", description: "Remove only this client's saved session", id: "/forget"},
 	{title: "Agent details", description: "Capabilities, auth methods, modes and model options", id: "/info"},
-	{title: "Authenticate", description: "/auth <method ID> from /info", id: "/auth "},
+	{title: "Authenticate", description: "Choose a login method", id: "/auth"},
 	{title: "Select mode", description: "Choose an agent operating mode", id: "/mode"},
 	{title: "Select model", description: "Choose a model", id: "/model"},
 	{title: "Reasoning effort", description: "Choose a reasoning level", id: "/effort"},
@@ -68,7 +70,12 @@ func (m *model) command(text string) tea.Cmd {
 	c := m.client
 	switch name {
 	case "/new":
+		m.resumeTarget = nil
 		return m.perform("Creating session…", c.New)
+	case "/close":
+		return m.perform("Closing session…", c.CloseSession)
+	case "/logout":
+		return m.perform("Logging out…", c.Logout)
 	case "/sessions":
 		m.busy = true
 		m.status = "Loading sessions…"
@@ -79,6 +86,7 @@ func (m *model) command(text string) tea.Cmd {
 			m.lastError = err.Error()
 			return nil
 		}
+		m.resumeTarget = &s
 		return m.perform("Loading session…", func() error { return c.Load(s) })
 	case "/fork":
 		if arg != "" && arg != "--context" {
@@ -101,10 +109,10 @@ func (m *model) command(text string) tea.Cmd {
 		return nil
 	case "/auth":
 		if arg == "" {
-			m.lastError = "Use /info to find an auth method, then /auth <method ID>"
+			m.openAuth()
 			return nil
 		}
-		return m.perform("Authenticating…", func() error { return c.Authenticate(arg) })
+		return m.authenticate(arg)
 	case "/mode", "/model", "/effort":
 		if arg == "" {
 			m.openSettings(name[1:])
@@ -218,6 +226,7 @@ func (m *model) sendPrompt(text string) tea.Cmd {
 	}
 	m.attachments = nil
 	m.busy = true
+	m.retryOperation = nil
 	m.prompting = true
 	m.lastError = ""
 	m.status = "Working…"

@@ -12,8 +12,12 @@ import (
 )
 
 func (c *Client) request(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	c.bindSetupSession(raw)
+	if method == schema.ElicitationCreateMethodName {
+		return c.elicit(ctx, raw)
+	}
 	if method != schema.SessionRequestPermissionMethodName {
-		return c.host.Request(ctx, method, raw)
+		return c.hostRequest(ctx, method, raw)
 	}
 	var request schema.RequestPermissionRequest
 	if err := json.Unmarshal(raw, &request); err != nil {
@@ -54,6 +58,9 @@ func (c *Client) request(ctx context.Context, method string, raw json.RawMessage
 }
 
 func (c *Client) notification(method string, raw json.RawMessage) error {
+	if method == schema.ElicitationCompleteMethodName {
+		return c.elicitationComplete(raw)
+	}
 	if method != schema.SessionUpdateMethodName {
 		return nil
 	}
@@ -77,6 +84,13 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		return nil
 	}
 	u := update.Update
+	if c.current.RemoteID == "" && update.SessionID != "" {
+		c.current.RemoteID = string(update.SessionID)
+		c.wire.SessionID = update.SessionID
+		for _, host := range c.hosts {
+			host.SetSession(update.SessionID)
+		}
+	}
 	chunk := func(role string, ch *schema.ContentChunk) {
 		text := ContentText(ch.Content)
 		id := ""

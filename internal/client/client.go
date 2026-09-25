@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -34,11 +35,18 @@ type Client struct {
 	Init             acp.Initialization
 	CanFork          bool
 	Permissions      chan Permission
+	Elicitations     chan Elicitation
+	urlElicitations  map[schema.ElicitationId]bool
+	command          config.Command
 	store            store.Store
 	ctx              context.Context
 	cancel           context.CancelFunc
 	conn             *acp.Connection
 	host             *clienthost.Host
+	hosts            map[string]*clienthost.Host
+	terminalHosts    map[string]terminalOwner
+	terminalSequence uint64
+	options          acp.NewSessionOptions
 	cmd              *exec.Cmd
 	wait             chan struct{}
 	closeOnce        sync.Once
@@ -59,15 +67,45 @@ type Client struct {
 }
 
 // Open starts an argv command directly; no shell interpretation is performed.
-func Open(parent context.Context, agent, cwd string, command config.Command, sessions store.Store) (*Client, error) {
+func Open(parent context.Context, agent, cwd string, command config.Command, sessions store.Store, settings ...config.SessionOptions) (*Client, error) {
+	return OpenInteractive(parent, agent, cwd, command, sessions, Interactions{}, settings...)
+}
+
+// Interactions lets a UI handle callbacks even before initialization completes.
+type Interactions struct {
+	Permissions  chan Permission
+	Elicitations chan Elicitation
+}
+
+func OpenInteractive(parent context.Context, agent, cwd string, command config.Command, sessions store.Store, interactions Interactions, settings ...config.SessionOptions) (*Client, error) {
 	ctx, cancel := context.WithCancel(parent)
 	c := &Client{Agent: agent, Cwd: cwd, store: sessions, ctx: ctx, cancel: cancel, Permissions: make(chan Permission, 32), wait: make(chan struct{})}
+	c.command = command
+	c.Elicitations = make(chan Elicitation, 32)
+	if interactions.Permissions != nil {
+		c.Permissions = interactions.Permissions
+	}
+	if interactions.Elicitations != nil {
+		c.Elicitations = interactions.Elicitations
+	}
+	c.urlElicitations = map[schema.ElicitationId]bool{}
 	host, err := clienthost.Open(ctx, clienthost.Config{Directory: cwd, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 	if err != nil {
 		cancel()
 		return nil, err
 	}
 	c.host = host
+	c.hosts = map[string]*clienthost.Host{cwd: host}
+	c.terminalHosts = map[string]terminalOwner{}
+	if len(settings) > 0 {
+		c.options.MCPServers = settings[0].MCPServers
+		for _, root := range settings[0].AdditionalDirectories {
+			if !filepath.IsAbs(root) {
+				root = filepath.Join(cwd, root)
+			}
+			c.options.AdditionalDirectories = append(c.options.AdditionalDirectories, filepath.Clean(root))
+		}
+	}
 	c.cmd = exec.CommandContext(ctx, command.Command, command.Args...)
 	c.cmd.Dir = cwd
 	c.cmd.Env = os.Environ()
@@ -109,6 +147,9 @@ func Open(parent context.Context, agent, cwd string, command config.Command, ses
 	var raw json.RawMessage
 	caps := acp.WorkspaceCapabilities(true, true, true)
 	caps.Session = acp.ConfigOptionsClientCapabilities(true)
+	caps.Elicitation = acp.ElicitationClientCapabilities(true, true)
+	terminalAuth := true
+	caps.Auth = &schema.AuthCapabilities{Terminal: &terminalAuth}
 	err = c.conn.Call(setup, schema.InitializeMethodName, schema.InitializeRequest{
 		ProtocolVersion: acp.Version, ClientCapabilities: &caps,
 		ClientInfo: &schema.Implementation{Name: "micro-acp", Version: "0.1.0"},
@@ -136,6 +177,17 @@ func (c *Client) Close() {
 		killProcess(c.cmd)
 		_ = c.conn.Close()
 		c.host.Close()
+		c.mu.Lock()
+		hosts := make([]*clienthost.Host, 0, len(c.hosts))
+		for _, host := range c.hosts {
+			if host != c.host {
+				hosts = append(hosts, host)
+			}
+		}
+		c.mu.Unlock()
+		for _, host := range hosts {
+			host.Close()
+		}
 		<-c.wait
 	})
 }
@@ -188,6 +240,11 @@ func (c *Client) set(s store.Session, w acp.Session) {
 	c.revision++
 	c.mu.Unlock()
 	c.host.SetSession(w.SessionID)
+	c.mu.Lock()
+	for _, host := range c.hosts {
+		host.SetSession(w.SessionID)
+	}
+	c.mu.Unlock()
 }
 func (c *Client) operation() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(c.ctx, 45*time.Second)
@@ -196,12 +253,20 @@ func (c *Client) operation() (context.Context, context.CancelFunc) {
 func (c *Client) New() error {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.Save(); err != nil {
+		return err
+	}
 	ctx, cancel := c.operation()
 	defer cancel()
 	previous, _ := c.Snapshot()
 	previousWire := c.session()
-	c.set(store.NewSession(c.Agent, "", c.Cwd), acp.Session{})
-	w, err := c.conn.NewSession(ctx, c.Cwd)
+	if err := c.prepareRoots(c.options.AdditionalDirectories); err != nil {
+		return err
+	}
+	next := store.NewSession(c.Agent, "", c.Cwd)
+	next.AdditionalDirectories = append([]string(nil), c.options.AdditionalDirectories...)
+	c.set(next, acp.Session{})
+	w, err := c.conn.NewSessionWithOptions(ctx, c.Init, c.Cwd, c.options)
 	if err != nil {
 		c.set(previous, previousWire)
 		return err
@@ -215,6 +280,9 @@ func (c *Client) New() error {
 func (c *Client) Load(s store.Session) error {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.Save(); err != nil {
+		return err
+	}
 	if s.Agent != c.Agent || s.Cwd != c.Cwd {
 		return errors.New("session belongs to another agent or workspace; reopen with its --agent and --cwd")
 	}
@@ -223,6 +291,9 @@ func (c *Client) Load(s store.Session) error {
 	previous, _ := c.Snapshot()
 	previousWire := c.session()
 	backup := s
+	if err := c.prepareRoots(s.AdditionalDirectories); err != nil {
+		return err
+	}
 	w := acp.Session{SessionID: schema.SessionId(s.RemoteID)}
 	cap := c.sessionCapabilities()
 	resume := cap != nil && cap.Resume != nil
@@ -237,12 +308,12 @@ func (c *Client) Load(s store.Session) error {
 	var err error
 	if resume {
 		var response schema.ResumeSessionResponse
-		response, err = c.conn.ResumeSession(ctx, c.Init, schema.ResumeSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: []schema.McpServer{}})
+		response, err = c.conn.ResumeSession(ctx, c.Init, schema.ResumeSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: c.mcpServers(), AdditionalDirectories: s.AdditionalDirectories})
 		w.Modes = response.Modes
 		w.ConfigOptions = response.ConfigOptions
 	} else {
 		var response schema.LoadSessionResponse
-		response, err = c.conn.LoadSession(ctx, c.Init, schema.LoadSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: []schema.McpServer{}})
+		response, err = c.conn.LoadSession(ctx, c.Init, schema.LoadSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: c.mcpServers(), AdditionalDirectories: s.AdditionalDirectories})
 		w.Modes = response.Modes
 		w.ConfigOptions = response.ConfigOptions
 	}
@@ -262,6 +333,9 @@ func (c *Client) Load(s store.Session) error {
 func (c *Client) Fork(contextOnly bool) error {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.Save(); err != nil {
+		return err
+	}
 	parent, _ := c.Snapshot()
 	if parent.ID == "" {
 		return errors.New("create or load a session first")
@@ -274,10 +348,13 @@ func (c *Client) Fork(contextOnly bool) error {
 	var w acp.Session
 	var err error
 	if contextOnly {
-		w, err = c.conn.NewSession(ctx, c.Cwd)
+		w, err = c.conn.NewSessionWithOptions(ctx, c.Init, c.Cwd, acp.NewSessionOptions{MCPServers: c.mcpServers(), AdditionalDirectories: parent.AdditionalDirectories})
 	} else {
 		var raw json.RawMessage
-		err = c.conn.Call(ctx, unstable.SessionForkMethodName, unstable.ForkSessionRequest{SessionID: unstable.SessionId(parent.RemoteID), Cwd: c.Cwd, MCPServers: []unstable.McpServer{}}, &raw)
+		var servers []unstable.McpServer
+		b, _ := json.Marshal(c.mcpServers())
+		_ = json.Unmarshal(b, &servers)
+		err = c.conn.Call(ctx, unstable.SessionForkMethodName, unstable.ForkSessionRequest{SessionID: unstable.SessionId(parent.RemoteID), Cwd: c.Cwd, MCPServers: servers, AdditionalDirectories: parent.AdditionalDirectories}, &raw)
 		if err == nil {
 			err = json.Unmarshal(raw, &w)
 		}
@@ -291,6 +368,7 @@ func (c *Client) Fork(contextOnly bool) error {
 	s := store.NewSession(c.Agent, string(w.SessionID), c.Cwd)
 	s.Title = parent.Title + " (fork)"
 	s.ParentID = parent.ID
+	s.AdditionalDirectories = append([]string(nil), parent.AdditionalDirectories...)
 	s.Messages = append([]store.Message(nil), parent.Messages...)
 	s.ForkKind = "native"
 	if contextOnly {
@@ -355,6 +433,7 @@ func (c *Client) Sessions() ([]store.Session, error) {
 				continue
 			}
 			s := store.NewSession(c.Agent, id, remote.Cwd)
+			s.AdditionalDirectories = remote.AdditionalDirectories
 			if remote.Title != nil {
 				s.Title = *remote.Title
 			}
