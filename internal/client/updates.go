@@ -3,8 +3,8 @@ package client
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"strings"
+	"time"
 
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
@@ -78,12 +78,7 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 	}
 	u := update.Update
 	chunk := func(role string, ch *schema.ContentChunk) {
-		text := ""
-		if ch.Content.Text != nil {
-			text = ch.Content.Text.Text
-		} else {
-			text = "[non-text content]"
-		}
+		text := ContentText(ch.Content)
 		id := ""
 		if ch.MessageID != nil {
 			id = string(*ch.MessageID)
@@ -93,6 +88,10 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 			c.current.Messages[last].Text += text
 		} else {
 			c.current.Messages = append(c.current.Messages, store.Message{Role: role, Text: text, ID: id})
+		}
+		if ch.Content.Text == nil {
+			i := len(c.current.Messages) - 1
+			c.current.Messages[i].Content = append(append([]schema.ContentBlock(nil), c.current.Messages[i].Content...), ch.Content)
 		}
 	}
 	switch {
@@ -106,26 +105,24 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		chunk("thought", u.AgentThoughtChunk)
 	case u.ToolCall != nil:
 		t := u.ToolCall
-		status := "pending"
-		if t.Status != nil {
-			status = string(*t.Status)
-		}
-		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: fmt.Sprintf("%s · %s", t.Title, status)})
+		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t})
 	case u.ToolCallUpdate != nil:
 		t := u.ToolCallUpdate
 		for i := len(c.current.Messages) - 1; i >= 0; i-- {
 			m := &c.current.Messages[i]
 			if m.Role == "tool" && m.ID == string(t.ToolCallID) {
-				if t.Title != nil {
-					m.Text = *t.Title
+				previous := schema.ToolCall{ToolCallID: t.ToolCallID, Title: m.Text}
+				if m.Tool != nil {
+					previous = *m.Tool
 				}
-				if t.Status != nil {
-					m.Text = strings.Split(m.Text, " · ")[0] + " · " + string(*t.Status)
-				}
+				updated := mergeTool(previous, *t)
+				m.Tool = &updated
+				m.Text = ToolText(updated)
 				break
 			}
 		}
 	case u.Plan != nil:
+		c.current.Plan = u.Plan
 		var lines []string
 		for _, entry := range u.Plan.Entries {
 			lines = append(lines, string(entry.Status)+"  "+entry.Content)
@@ -135,6 +132,15 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		if u.SessionInfoUpdate.Title != nil {
 			c.current.Title = *u.SessionInfoUpdate.Title
 		}
+		if u.SessionInfoUpdate.UpdatedAt != nil {
+			if stamp, err := time.Parse(time.RFC3339, *u.SessionInfoUpdate.UpdatedAt); err == nil {
+				c.current.UpdatedAt = stamp
+			}
+		}
+	case u.AvailableCommandsUpdate != nil:
+		c.current.Commands = u.AvailableCommandsUpdate.AvailableCommands
+	case u.UsageUpdate != nil:
+		c.current.Usage = u.UsageUpdate
 	case u.ConfigOptionUpdate != nil:
 		c.wire.ConfigOptions = u.ConfigOptionUpdate.ConfigOptions
 	case u.CurrentModeUpdate != nil:

@@ -108,6 +108,7 @@ func Open(parent context.Context, agent, cwd string, command config.Command, ses
 	// facade intentionally omits. Both representations come from acp-go's schemas.
 	var raw json.RawMessage
 	caps := acp.WorkspaceCapabilities(true, true, true)
+	caps.Session = acp.ConfigOptionsClientCapabilities(true)
 	err = c.conn.Call(setup, schema.InitializeMethodName, schema.InitializeRequest{
 		ProtocolVersion: acp.Version, ClientCapabilities: &caps,
 		ClientInfo: &schema.Implementation{Name: "micro-acp", Version: "0.1.0"},
@@ -172,7 +173,14 @@ func (c *Client) Shutdown() error {
 	})
 	return c.shutdownErr
 }
-func (c *Client) session() acp.Session { c.mu.Lock(); defer c.mu.Unlock(); return c.wire }
+func (c *Client) session() acp.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	b, _ := json.Marshal(c.wire)
+	var snapshot acp.Session
+	_ = json.Unmarshal(b, &snapshot)
+	return snapshot
+}
 func (c *Client) set(s store.Session, w acp.Session) {
 	c.mu.Lock()
 	c.current = s
@@ -398,9 +406,21 @@ func (c *Client) Delete(s store.Session, localOnly bool) error {
 	return nil
 }
 
-func (c *Client) Prompt(text string) (reason schema.StopReason, err error) {
+func (c *Client) Prompt(text string) (schema.StopReason, error) {
+	return c.PromptContent([]acp.Content{acp.NewTextContent(text)})
+}
+
+func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, err error) {
 	c.op.Lock()
 	defer c.op.Unlock()
+	if err := c.validateContent(blocks); err != nil {
+		return "", err
+	}
+	var display []string
+	for _, block := range blocks {
+		display = append(display, ContentText(block))
+	}
+	text := strings.Join(display, "\n")
 	s, _ := c.Snapshot()
 	if s.ID == "" {
 		return "", errors.New("create or load a session first with /new or /sessions")
@@ -414,7 +434,7 @@ func (c *Client) Prompt(text string) (reason schema.StopReason, err error) {
 	c.permissionCtx = permissions
 	c.permissionCancel = stopPermissions
 	c.cancelRequested = false
-	c.current.Messages = append(c.current.Messages, store.Message{Role: "user", Text: text})
+	c.current.Messages = append(c.current.Messages, store.Message{Role: "user", Text: text, Content: blocks})
 	if c.current.Title == "New session" {
 		title := []rune(strings.Join(strings.Fields(text), " "))
 		c.current.Title = string(title[:min(len(title), 70)])
@@ -442,9 +462,9 @@ func (c *Client) Prompt(text string) (reason schema.StopReason, err error) {
 		return "", err
 	}
 	if s.PendingContext != "" {
-		text = s.PendingContext + text
+		blocks = append([]acp.Content{acp.NewTextContent(s.PendingContext)}, blocks...)
 	}
-	reason, err = c.conn.Prompt(ctx, c.session(), text)
+	reason, err = c.conn.PromptContent(ctx, c.Init, c.session(), blocks)
 	c.mu.Lock()
 	cancelled := c.cancelRequested
 	c.mu.Unlock()
@@ -500,29 +520,6 @@ func (c *Client) Authenticate(method string) error {
 	ctx, cancel := context.WithTimeout(c.ctx, 3*time.Minute)
 	defer cancel()
 	return c.conn.Authenticate(ctx, c.Init, method)
-}
-func (c *Client) Configure(kind, value string) error {
-	c.op.Lock()
-	defer c.op.Unlock()
-	w := c.session()
-	ctx, cancel := c.operation()
-	defer cancel()
-	var err error
-	switch kind {
-	case "mode":
-		err = c.conn.SetMode(ctx, &w, value)
-	case "model":
-		err = c.conn.SetModel(ctx, &w, value)
-	case "effort":
-		err = c.conn.SetEffort(ctx, &w, value)
-	}
-	if err == nil {
-		c.mu.Lock()
-		c.wire = w
-		c.revision++
-		c.mu.Unlock()
-	}
-	return err
 }
 func (c *Client) Details() string {
 	w := c.session()

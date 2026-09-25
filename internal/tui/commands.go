@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
+	"github.com/BrokkAi/micro-acp/internal/client"
 )
 
 var commands = []item{
@@ -18,9 +19,12 @@ var commands = []item{
 	{title: "Forget session locally", description: "Remove only this client's saved session", id: "/forget"},
 	{title: "Agent details", description: "Capabilities, auth methods, modes and model options", id: "/info"},
 	{title: "Authenticate", description: "/auth <method ID> from /info", id: "/auth "},
-	{title: "Select mode", description: "/mode <mode ID> from /info", id: "/mode "},
-	{title: "Select model", description: "/model <model ID> from /info", id: "/model "},
-	{title: "Reasoning effort", description: "/effort <value> from /info", id: "/effort "},
+	{title: "Select mode", description: "Choose an agent operating mode", id: "/mode"},
+	{title: "Select model", description: "Choose a model", id: "/model"},
+	{title: "Reasoning effort", description: "Choose a reasoning level", id: "/effort"},
+	{title: "Session settings", description: "All agent-provided options, including toggles", id: "/settings"},
+	{title: "Attach a file", description: "Text, images, audio, or binary resources", id: "/attach "},
+	{title: "Clear attachments", description: "Remove queued attachments", id: "/detach"},
 	{title: "Load session", description: "/load <local session ID>", id: "/load "},
 	{title: "Refresh registry", description: "Check the latest published agent versions", id: "/refresh"},
 	{title: "Help", description: "Commands and keyboard shortcuts", id: "/help"},
@@ -28,8 +32,9 @@ var commands = []item{
 }
 
 func (m *model) openCommands() {
-	items := make([]list.Item, len(commands))
-	for i, c := range commands {
+	all := m.allCommands()
+	items := make([]list.Item, len(all))
+	for i, c := range all {
 		items[i] = c
 	}
 	m.openPicker("commands", items)
@@ -102,10 +107,35 @@ func (m *model) command(text string) tea.Cmd {
 		return m.perform("Authenticating…", func() error { return c.Authenticate(arg) })
 	case "/mode", "/model", "/effort":
 		if arg == "" {
-			m.lastError = fmt.Sprintf("Usage: %s <value> · /info shows available options", name)
+			m.openSettings(name[1:])
 			return nil
 		}
 		return m.perform("Updating "+name[1:]+"…", func() error { return c.Configure(name[1:], arg) })
+	case "/settings":
+		m.openSettings("")
+		return nil
+	case "/attach":
+		if arg == "" {
+			m.input.SetValue("@")
+			return m.findFiles()
+		}
+		if _, err := c.Attachment(arg); err != nil {
+			m.lastError = err.Error()
+			return nil
+		}
+		m.attachments = append(m.attachments, arg)
+		m.status = "Attached " + arg
+		return nil
+	case "/detach":
+		m.attachments = nil
+		m.status = "Attachments cleared"
+		return nil
+	case "/agent":
+		if arg == "" {
+			m.lastError = "Usage: /agent <command and arguments>"
+			return nil
+		}
+		return m.sendPrompt("/" + strings.TrimPrefix(arg, "/"))
 	case "/info":
 		m.info = c.Details()
 		m.page = "info"
@@ -113,7 +143,88 @@ func (m *model) command(text string) tea.Cmd {
 		m.viewport.GotoTop()
 		return nil
 	default:
-		m.lastError = "Unknown command " + name + " · /help lists commands"
+		return m.sendPrompt(text)
+	}
+}
+
+func (m *model) allCommands() []item {
+	all := append([]item(nil), commands...)
+	if m.client != nil {
+		s, _ := m.client.Snapshot()
+		for _, command := range s.Commands {
+			name := "/" + command.Name
+			for _, local := range commands {
+				if strings.TrimSpace(local.id) == name {
+					name = "/agent " + command.Name
+					break
+				}
+			}
+			all = append(all, item{title: name, description: "Agent · " + command.Description, id: name})
+		}
+	}
+	return all
+}
+
+func (m *model) openSettings(category string) {
+	if category == "effort" {
+		category = "thought_level"
+	}
+	var entries []list.Item
+	for _, s := range m.client.Selectors() {
+		if category != "" && s.Category != category {
+			continue
+		}
+		entries = append(entries, item{title: s.Name, description: s.Current + " · " + s.Description, id: s.ID, value: s})
+	}
+	if len(entries) == 0 {
+		m.lastError = "Agent does not offer " + category + " settings"
+		return
+	}
+	if category != "" && len(entries) == 1 {
+		m.chooseSetting(entries[0].(item).value.(client.Selector))
+		return
+	}
+	m.openPicker("settings", entries)
+}
+func (m *model) chooseSetting(s client.Selector) {
+	m.selector = s
+	var entries []list.Item
+	selected := 0
+	for i, choice := range s.Choices {
+		title := choice.Name
+		if choice.Group != "" {
+			title = choice.Group + " / " + title
+		}
+		if choice.Value == s.Current {
+			title += " ✓"
+			selected = i
+		}
+		entries = append(entries, item{title: title, description: choice.Description, id: choice.Value})
+	}
+	m.openPicker("choices", entries)
+	m.picker.Select(selected)
+}
+func (m *model) sendPrompt(text string) tea.Cmd {
+	c := m.client
+	if c == nil {
+		m.lastError = "Choose an agent first"
 		return nil
+	}
+	blocks, err := m.promptBlocks(text)
+	if err != nil {
+		m.lastError = err.Error()
+		m.input.SetValue(text)
+		return nil
+	}
+	m.attachments = nil
+	m.busy = true
+	m.prompting = true
+	m.lastError = ""
+	m.status = "Working…"
+	m.draft = ""
+	m.viewport.GotoBottom()
+	return func() tea.Msg {
+		reason, err := c.PromptContent(blocks)
+		return resultMsg{status: fmt.Sprintf("Turn finished · %s", reason), err: err}
 	}
 }

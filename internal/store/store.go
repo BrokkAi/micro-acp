@@ -12,27 +12,34 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/config"
 )
 
 type Message struct {
-	Role string `json:"role"`
-	Text string `json:"text"`
-	ID   string `json:"id,omitempty"`
+	Role    string                `json:"role"`
+	Text    string                `json:"text"`
+	ID      string                `json:"id,omitempty"`
+	Content []schema.ContentBlock `json:"content,omitempty"`
+	Tool    *schema.ToolCall      `json:"tool,omitempty"`
 }
 
 type Session struct {
-	ID             string    `json:"id"`
-	Agent          string    `json:"agent"`
-	RemoteID       string    `json:"remote_id"`
-	Cwd            string    `json:"cwd"`
-	Title          string    `json:"title"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	ParentID       string    `json:"parent_id,omitempty"`
-	ForkKind       string    `json:"fork_kind,omitempty"`
-	PendingContext string    `json:"pending_context,omitempty"`
-	Messages       []Message `json:"messages"`
+	ID                    string                    `json:"id"`
+	Agent                 string                    `json:"agent"`
+	RemoteID              string                    `json:"remote_id"`
+	Cwd                   string                    `json:"cwd"`
+	Title                 string                    `json:"title"`
+	CreatedAt             time.Time                 `json:"created_at"`
+	UpdatedAt             time.Time                 `json:"updated_at"`
+	ParentID              string                    `json:"parent_id,omitempty"`
+	ForkKind              string                    `json:"fork_kind,omitempty"`
+	PendingContext        string                    `json:"pending_context,omitempty"`
+	Messages              []Message                 `json:"messages"`
+	Commands              []schema.AvailableCommand `json:"commands,omitempty"`
+	Usage                 *schema.UsageUpdate       `json:"usage,omitempty"`
+	Plan                  *schema.Plan              `json:"plan,omitempty"`
+	AdditionalDirectories []string                  `json:"additional_directories,omitempty"`
 }
 
 type Store struct{ Directory string }

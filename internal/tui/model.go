@@ -84,6 +84,12 @@ type model struct {
 	renderCache      map[string]string
 	info             string
 	started          bool
+	selector         client.Selector
+	history          []string
+	historyIndex     int
+	draft            string
+	attachments      []string
+	filePrefix       string
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -270,6 +276,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.lastError = ""
 		}
 		m.renderTranscript(true)
+		if m.client != nil {
+			s, _ := m.client.Snapshot()
+			m.history = nil
+			for _, entry := range s.Messages {
+				if entry.Role == "user" {
+					m.history = append(m.history, entry.Text)
+				}
+			}
+			m.historyIndex = len(m.history)
+		}
 	case sessionsMsg:
 		m.busy = false
 		var items []list.Item
@@ -278,6 +294,13 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.openPicker("sessions", items)
 		m.status = "Enter load · Ctrl+D delete · Esc back"
+		if msg.err != nil {
+			m.lastError = msg.err.Error()
+		}
+	case filesMsg:
+		m.busy = false
+		m.filePrefix = msg.prefix
+		m.openPicker("files", msg.entries)
 		if msg.err != nil {
 			m.lastError = msg.err.Error()
 		}
@@ -366,7 +389,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.viewport, cmd = m.viewport.Update(msg)
 			return m, cmd
 		}
-		if m.page == "agents" || m.page == "sessions" || m.page == "commands" {
+		if m.page == "agents" || m.page == "sessions" || m.page == "commands" || m.page == "settings" || m.page == "choices" || m.page == "files" {
 			if m.busy {
 				return m, nil
 			}
@@ -382,6 +405,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					case "commands":
 						m.page = "chat"
 						m.input.SetValue(selected.id)
+						m.input.CursorEnd()
+						return m, nil
+					case "settings":
+						m.chooseSetting(selected.value.(client.Selector))
+						return m, nil
+					case "choices":
+						c, id, value := m.client, m.selector.ID, selected.id
+						m.page = "chat"
+						return m, m.perform("Updating "+m.selector.Name+"…", func() error { return c.SetConfig(id, value) })
+					case "files":
+						m.page = "chat"
+						m.input.SetValue(m.filePrefix + quoteReference(selected.id) + " ")
 						m.input.CursorEnd()
 						return m, nil
 					}
@@ -405,13 +440,35 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 		if k == "tab" && strings.HasPrefix(m.input.Value(), "/") {
-			for _, c := range commands {
+			for _, c := range m.allCommands() {
 				if strings.HasPrefix(c.id, m.input.Value()) {
 					m.input.SetValue(c.id)
 					m.input.CursorEnd()
 					break
 				}
 			}
+			return m, nil
+		}
+		if k == "tab" && strings.Contains(m.input.Value(), "@") && !m.busy {
+			return m, m.findFiles()
+		}
+		if (k == "alt+up" || (k == "up" && m.input.Line() == 0)) && len(m.history) > 0 {
+			if m.historyIndex == len(m.history) {
+				m.draft = m.input.Value()
+			}
+			m.historyIndex = max(0, m.historyIndex-1)
+			m.input.SetValue(m.history[m.historyIndex])
+			m.input.CursorEnd()
+			return m, nil
+		}
+		if (k == "alt+down" || k == "down") && m.historyIndex < len(m.history) {
+			m.historyIndex++
+			if m.historyIndex == len(m.history) {
+				m.input.SetValue(m.draft)
+			} else {
+				m.input.SetValue(m.history[m.historyIndex])
+			}
+			m.input.CursorEnd()
 			return m, nil
 		}
 		if k == "enter" && !m.busy {
@@ -427,16 +484,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.lastError = "Choose an agent with /agents first"
 				return m, nil
 			}
-			c := m.client
-			m.busy = true
-			m.lastError = ""
-			m.status = "Working…"
-			m.prompting = true
-			m.viewport.GotoBottom()
-			return m, func() tea.Msg {
-				reason, err := c.Prompt(text)
-				return resultMsg{status: "Turn finished · " + string(reason), err: err}
-			}
+			return m, m.sendPrompt(text)
 		}
 	}
 	if m.page == "chat" {

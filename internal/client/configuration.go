@@ -1,0 +1,190 @@
+package client
+
+import (
+	"encoding/json"
+	"fmt"
+	"strconv"
+
+	"github.com/BrokkAi/acp-go/schema"
+)
+
+type Choice struct{ Value, Name, Description, Group string }
+type Selector struct {
+	ID, Name, Description, Category, Current string
+	Boolean                                  bool
+	Choices                                  []Choice
+}
+
+func ptrText[T ~string](s *T) string {
+	if s == nil {
+		return ""
+	}
+	return string(*s)
+}
+
+func selectChoices(raw any) []Choice {
+	b, _ := json.Marshal(raw)
+	var entries []json.RawMessage
+	if json.Unmarshal(b, &entries) != nil {
+		return nil
+	}
+	var choices []Choice
+	for _, entry := range entries {
+		var group schema.SessionConfigSelectGroup
+		_ = json.Unmarshal(entry, &group)
+		if group.Group != "" {
+			for _, option := range group.Options {
+				choices = append(choices, Choice{string(option.Value), option.Name, ptrText(option.Description), group.Name})
+			}
+		} else {
+			var option schema.SessionConfigSelectOption
+			if json.Unmarshal(entry, &option) == nil {
+				choices = append(choices, Choice{string(option.Value), option.Name, ptrText(option.Description), ""})
+			}
+		}
+	}
+	return choices
+}
+
+// Selectors preserves the agent's ordering and prefers configOptions over legacy modes.
+func (c *Client) Selectors() []Selector {
+	w := c.session()
+	var selectors []Selector
+	mode := false
+	for _, option := range w.ConfigOptions {
+		s := Selector{ID: string(option.ID), Name: option.Name, Description: ptrText(option.Description), Category: ptrText(option.Category)}
+		if s.Category == "" {
+			switch s.ID {
+			case "model", "mode":
+				s.Category = s.ID
+			case "reasoning_effort":
+				s.Category = "thought_level"
+			}
+		}
+		mode = mode || s.Category == "mode"
+		if option.Select != nil {
+			s.Current = string(option.Select.CurrentValue)
+			s.Choices = selectChoices(option.Select.Options)
+		}
+		if option.Boolean != nil {
+			s.Boolean = true
+			s.Current = strconv.FormatBool(option.Boolean.CurrentValue)
+			s.Choices = []Choice{{Value: "true", Name: "On"}, {Value: "false", Name: "Off"}}
+		}
+		selectors = append(selectors, s)
+	}
+	if !mode && w.Modes != nil {
+		s := Selector{ID: "@mode", Name: "Mode", Category: "mode", Current: string(w.Modes.CurrentModeID)}
+		for _, mode := range w.Modes.AvailableModes {
+			s.Choices = append(s.Choices, Choice{Value: string(mode.ID), Name: mode.Name, Description: ptrText(mode.Description)})
+		}
+		selectors = append(selectors, s)
+	}
+	return selectors
+}
+
+func (c *Client) Configure(kind, value string) error {
+	category := kind
+	if kind == "effort" {
+		category = "thought_level"
+	}
+	for _, s := range c.Selectors() {
+		if s.Category == category || s.ID == kind {
+			return c.SetConfig(s.ID, value)
+		}
+	}
+	return fmt.Errorf("agent does not offer %s selection", kind)
+}
+
+func (c *Client) SetConfig(id, value string) error {
+	c.op.Lock()
+	defer c.op.Unlock()
+	w := c.session()
+	if w.SessionID == "" {
+		return fmt.Errorf("create or load a session first")
+	}
+	var selected *Selector
+	for _, s := range c.Selectors() {
+		if s.ID == id {
+			selected = &s
+			break
+		}
+	}
+	if selected == nil {
+		return fmt.Errorf("unknown configuration %q", id)
+	}
+	valid := false
+	for _, choice := range selected.Choices {
+		if choice.Value == value {
+			valid = true
+		}
+	}
+	if !valid {
+		return fmt.Errorf("%q is not offered for %s", value, selected.Name)
+	}
+	ctx, cancel := c.operation()
+	defer cancel()
+	if id == "@mode" {
+		if err := c.conn.SetMode(ctx, &w, value); err != nil {
+			return err
+		}
+		c.mu.Lock()
+		c.wire.Modes = w.Modes
+		c.revision++
+		c.mu.Unlock()
+		return nil
+	}
+	request := schema.SetSessionConfigOptionRequest{SessionID: w.SessionID, ConfigID: schema.SessionConfigId(id)}
+	if selected.Boolean {
+		request.Boolean = &schema.SetSessionConfigOptionRequestBoolean{Value: value == "true"}
+	} else {
+		request.ValueID = &schema.SetSessionConfigOptionRequestValueID{Value: schema.SessionConfigValueId(value)}
+	}
+	var response schema.SetSessionConfigOptionResponse
+	if err := c.conn.Call(ctx, schema.SessionSetConfigOptionMethodName, request, &response); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.wire.ConfigOptions = response.ConfigOptions
+	c.revision++
+	c.mu.Unlock()
+	for _, s := range c.Selectors() {
+		if s.ID == id && s.Current == value {
+			return nil
+		}
+	}
+	return fmt.Errorf("agent did not confirm %s = %s", selected.Name, value)
+}
+
+func (c *Client) Status() string {
+	var values []string
+	for _, s := range c.Selectors() {
+		if s.Category == "model" || s.Category == "mode" || s.Category == "thought_level" {
+			name := s.Current
+			for _, o := range s.Choices {
+				if o.Value == s.Current {
+					name = o.Name
+				}
+			}
+			values = append(values, name)
+		}
+	}
+	text := ""
+	for _, v := range values {
+		if text != "" {
+			text += " · "
+		}
+		text += v
+	}
+	s, _ := c.Snapshot()
+	if s.Usage != nil {
+		if text != "" {
+			text += " · "
+		}
+		text += fmt.Sprintf("%d/%d tokens", s.Usage.Used, s.Usage.Size)
+		if s.Usage.Cost != nil {
+			text += fmt.Sprintf(" · %.4f %s", s.Usage.Cost.Amount, s.Usage.Cost.Currency)
+		}
+	}
+	return text
+}

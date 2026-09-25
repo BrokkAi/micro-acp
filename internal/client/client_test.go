@@ -23,6 +23,10 @@ func TestAgentProcess(t *testing.T) {
 	if mode == "" {
 		return
 	}
+	if mode == "rich" {
+		serveRichAgent()
+		os.Exit(0)
+	}
 	if mode == "demo" {
 		if err := demo.Run(context.Background(), os.Getenv("MICRO_ACP_TEST_DATA")); err != nil {
 			fmt.Fprintln(os.Stderr, err)

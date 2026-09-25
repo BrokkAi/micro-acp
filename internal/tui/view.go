@@ -117,6 +117,11 @@ func (m *model) View() tea.View {
 	}
 	header := accent.Bold(true).Render("μ micro-acp") + muted.Render("  /  ") + line(agent, max(8, w-16))
 	subtitle := line(m.options.Cwd, w)
+	if m.client != nil {
+		if state := m.client.Status(); state != "" {
+			subtitle = line(state+" · "+m.options.Cwd, w)
+		}
+	}
 	if m.catalog.Warning != "" {
 		subtitle = "cached registry · " + line(m.options.Cwd, max(1, w-18))
 	}
@@ -157,6 +162,12 @@ func (m *model) View() tea.View {
 		body = accent.Bold(true).Render("SESSIONS") + muted.Render("  "+line(agent, w-12)) + "\n" + m.picker.View()
 	case m.page == "commands":
 		body = accent.Bold(true).Render("COMMANDS") + "\n" + m.picker.View()
+	case m.page == "settings":
+		body = accent.Bold(true).Render("SESSION SETTINGS") + "\n" + m.picker.View()
+	case m.page == "choices":
+		body = accent.Bold(true).Render(clean(m.selector.Name)) + "\n" + m.picker.View()
+	case m.page == "files":
+		body = accent.Bold(true).Render("ATTACH FILE") + "\n" + m.picker.View()
 	case m.page == "info":
 		body = accent.Bold(true).Render("AGENT & SESSION") + muted.Render("  Esc back") + "\n" + m.viewport.View()
 	default:
@@ -164,6 +175,9 @@ func (m *model) View() tea.View {
 	}
 	body = lipgloss.NewStyle().Width(w).MaxWidth(w).Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
 	status := m.status
+	if len(m.attachments) > 0 {
+		status = fmt.Sprintf("%d attachments · %s", len(m.attachments), status)
+	}
 	if m.lastError != "" {
 		status = m.lastError
 	}
