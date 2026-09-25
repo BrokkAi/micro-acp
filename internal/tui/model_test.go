@@ -66,6 +66,27 @@ func TestViewFitsTerminalAndStripsControls(t *testing.T) {
 		t.Fatalf("terminal control leak: %q", value)
 	}
 }
+
+func TestDialogsFitWithLongDraftAndLongContext(t *testing.T) {
+	for _, size := range [][2]int{{35, 14}, {80, 24}} {
+		m, e := formModel(t)
+		m.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		m.input.SetValue(strings.Repeat("long unsent draft\n", 12))
+		m.elicitation.event.Request.Message = strings.Repeat("Read this explanation. ", 100)
+		m.elicitation.index = len(m.elicitation.fields)
+		view := m.View().Content
+		if lipgloss.Height(view) > size[1] || lipgloss.Width(view) > size[0] || !strings.Contains(view, "› Cancel") || !strings.Contains(view, "Submit") {
+			t.Fatalf("form controls hidden at %v:\n%s", size, view)
+		}
+		m.Update(keyPress(tea.KeyEscape, 0))
+		<-e.Reply
+		m.Update(permissionMsg{client.Permission{Request: schema.RequestPermissionRequest{Options: []schema.PermissionOption{{Name: "Allow once"}, {Name: "Reject"}}}, Reply: make(chan schema.RequestPermissionOutcome, 1), Done: make(chan struct{})}})
+		view = m.View().Content
+		if lipgloss.Height(view) > size[1] || !strings.Contains(view, "› Cancel") {
+			t.Fatalf("permission controls hidden:\n%s", view)
+		}
+	}
+}
 func TestCommandsDoNotLaunchWithoutAgent(t *testing.T) {
 	m := newModel(context.Background(), Options{})
 	if cmd := m.command("/new"); cmd != nil || m.lastError == "" {

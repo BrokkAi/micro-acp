@@ -17,6 +17,7 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/registry"
 	"github.com/BrokkAi/micro-acp/internal/store"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type Options struct {
@@ -299,6 +300,9 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			if m.client == nil && !m.busy {
 				m.lastError = "Registry unavailable. Use a configured agent, /refresh, or -- /path/to/agent."
 			}
+		}
+		if m.catalog.Warning != "" {
+			m.queueOutput(muted.Render(ansi.Wrap(clean(m.catalog.Warning), max(10, m.width-4), "")))
 		}
 		if !m.started && m.options.Agent != "" {
 			m.started = true

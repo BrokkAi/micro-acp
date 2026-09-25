@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
@@ -222,66 +224,83 @@ func openBrowser(address string) error {
 	}
 	return cmd.Run()
 }
-func (m *model) elicitationView() string {
+func (m *model) elicitationView() string { return m.elicitationPanel(max(20, m.height-4)) }
+
+// Keep the active field and action choices visible; only explanatory context scrolls.
+func (m *model) elicitationPanel(height int) string {
 	e := m.elicitation
-	w := max(10, m.width-6)
-	var b strings.Builder
-	b.WriteString(accent.Bold(true).Render("INPUT REQUEST · "+clean(e.event.Agent)) + "\n" + ansi.Hardwrap(clean(e.event.Request.Message), w, true) + "\n\n")
+	w := max(10, m.width-4)
+	context := clean(e.event.Request.Message)
 	if e.event.URL != "" {
 		u, _ := url.Parse(e.event.URL)
-		b.WriteString("Open in your browser: " + clean(u.Host) + "\n" + ansi.Hardwrap(clean(e.event.URL), w, true) + "\n\n")
+		context += "\nOpen in your browser: " + clean(u.Host) + "\n" + clean(e.event.URL)
 	}
+	var controls []string
 	if e.index < len(e.fields) {
 		f := e.fields[e.index]
 		required := "optional"
 		if f.Required {
 			required = "required"
 		}
-		fmt.Fprintf(&b, "%d/%d · %s (%s)\n%s\n\n", e.index+1, len(e.fields), clean(f.Title), required, clean(f.Description))
+		controls = append(controls, line(fmt.Sprintf("%d/%d · %s (%s)", e.index+1, len(e.fields), f.Title, required), w))
+		if f.Description != "" {
+			context += "\n" + clean(f.Description)
+		}
 		if len(f.Options) > 0 {
-			start := max(0, e.choice-max(2, (m.height-20)/2))
-			end := min(len(f.Options), start+max(3, m.height-19))
-			for i := start; i < end; i++ {
-				o := f.Options[i]
-				prefix := "  "
-				if i == e.choice {
-					prefix = "› "
-				}
+			var choices []item
+			var selected []string
+			if f.Kind == "array" {
+				_ = json.Unmarshal([]byte(e.values[f.Name]), &selected)
+			}
+			for _, o := range f.Options {
+				label := o.Label
 				if f.Kind == "array" {
-					var selected []string
-					_ = json.Unmarshal([]byte(e.values[f.Name]), &selected)
 					mark := "[ ] "
 					for _, v := range selected {
 						if v == o.Value {
 							mark = "[x] "
 						}
 					}
-					prefix += mark
+					label = mark + label
 				}
-				fmt.Fprintf(&b, "%s%s\n", prefix, clean(o.Label))
+				choices = append(choices, item{title: label})
 			}
+			controls = append(controls, suggestionRows(choices, e.choice, w, min(5, max(1, height-7)), false))
 		} else {
-			b.WriteString(e.input.View() + "\n")
+			controls = append(controls, e.input.View())
 		}
-		b.WriteString("\n" + muted.Render("Enter next · Shift+Tab back · Space toggle · Ctrl+X skip optional · Ctrl+D decline · Esc cancel"))
+		hint := "Enter next · Esc cancel · PgUp/PgDn details · Shift+Tab back · Ctrl+X skip · Ctrl+D decline"
+		if f.Kind == "array" {
+			hint = "Space toggle · " + hint
+		}
+		controls = append(controls, muted.Render(line(hint, w)))
 	} else {
 		if len(e.fields) > 0 {
-			b.WriteString("Review your responses (Shift+Tab to edit):\n")
+			context += "\nReview your responses (Shift+Tab to edit):"
 			for _, f := range e.fields {
-				fmt.Fprintf(&b, "%s: %s\n", clean(f.Title), clean(e.values[f.Name]))
+				context += "\n" + clean(f.Title) + ": " + clean(e.values[f.Name])
 			}
-			b.WriteByte('\n')
 		}
-		for i, label := range []string{"Submit / open URL", "Decline", "Cancel"} {
+		label := "Submit"
+		if e.event.URL != "" {
+			label = "Submit / open URL"
+		}
+		for i, text := range []string{label, "Decline", "Cancel"} {
 			prefix := "  "
 			if e.action == i {
 				prefix = "› "
 			}
-			b.WriteString(prefix + label + "\n")
+			controls = append(controls, line(prefix+text, w))
 		}
+		controls = append(controls, muted.Render(line("Enter confirm · Esc cancel · PgUp/PgDn details", w)))
 	}
 	if e.err != "" {
-		b.WriteString("\n" + danger.Render(clean(e.err)))
+		controls = append(controls, danger.Render(line(e.err, w)))
 	}
-	return b.String()
+	body := strings.Join(controls, "\n")
+	context = ansi.Wrap(context, w, "")
+	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(context)), max(1, height-lipgloss.Height(body)-1))))
+	v.SetContent(context)
+	v.SetYOffset(m.interactionOffset)
+	return accent.Bold(true).Render(line("INPUT REQUEST · "+e.event.Agent, w)) + "\n" + v.View() + "\n" + body
 }

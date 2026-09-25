@@ -82,11 +82,11 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 			for _, part := range message.Tool.Content {
 				if part.Diff != nil {
 					d := part.Diff
-					old := 0
-					if d.OldText != nil {
-						old = len(strings.Split(*d.OldText, "\n"))
+					label := "updated"
+					if d.OldText == nil {
+						label = "created"
 					}
-					summary += "\n" + muted.Render(line("  "+d.Path+fmt.Sprintf("  +%d −%d", len(strings.Split(d.NewText, "\n")), old), width))
+					summary += "\n" + muted.Render(line("  "+d.Path+" · "+label+" · Ctrl+O for diff", width))
 				}
 			}
 		}

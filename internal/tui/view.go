@@ -35,6 +35,12 @@ func line(s string, width int) string {
 }
 func cropLines(s string, height int, tail bool) string {
 	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	if height <= 1 {
+		if tail {
+			return lines[len(lines)-1]
+		}
+		return lines[0]
+	}
 	if len(lines) <= height {
 		return strings.Join(lines, "\n")
 	}
@@ -65,7 +71,11 @@ func suggestionRows(entries []item, index, width, limit int, commands bool) stri
 			prefix = "› "
 			style = accent.Bold(true)
 		}
-		label = line(label, labelWidth)
+		if description == "" {
+			label = line(label, width-2)
+		} else {
+			label = line(label, labelWidth)
+		}
 		row := prefix + label
 		if description != "" && width > 42 {
 			row += strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(label)+2)) + line(description, max(1, width-labelWidth-4))
@@ -79,7 +89,7 @@ func suggestionRows(entries []item, index, width, limit int, commands bool) stri
 	}
 	return strings.Join(rows, "\n")
 }
-func (m *model) completionView() string {
+func (m *model) completionView(height int) string {
 	c := m.completion
 	if c == nil {
 		return ""
@@ -98,25 +108,25 @@ func (m *model) completionView() string {
 	} else if c.kind == "files" && m.filesError != "" {
 		body += danger.Render(line(m.filesError, w))
 	} else {
-		body += suggestionRows(c.entries, c.index, w, min(5, max(2, m.height/5)), c.kind == "commands")
+		body += suggestionRows(c.entries, c.index, w, min(5, max(1, height-3)), c.kind == "commands")
 	}
 	return body + "\n" + muted.Render(line("↑↓ navigate · Tab complete · Enter select · Esc dismiss", w))
 }
-func (m *model) pickerView() string {
+func (m *model) pickerView(height int) string {
 	p := m.picker
 	w := max(10, m.width-4)
 	title := p.title
 	if p.kind == "agents" && m.catalogLoading {
 		title += " · updating registry"
 	}
-	result := accent.Bold(true).Render(title) + "\n" + p.input.View() + "\n" + suggestionRows(p.matches, p.index, w, min(5, max(2, m.height/5)), p.kind == "commands")
+	result := accent.Bold(true).Render(title) + "\n" + p.input.View() + "\n" + suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
 	hint := "↑↓ navigate · Enter select · Esc back"
 	if p.kind == "sessions" {
 		hint += " · Ctrl+D delete"
 	}
 	return result + "\n" + muted.Render(line(hint, w))
 }
-func (m *model) permissionView() string {
+func (m *model) permissionView(height int) string {
 	p := m.permission
 	w := max(10, m.width-4)
 	title := "Allow this action?"
@@ -125,22 +135,17 @@ func (m *model) permissionView() string {
 	}
 	tool := schema.ToolCall{ToolCallID: p.Request.ToolCall.ToolCallID, Content: p.Request.ToolCall.Content, RawInput: p.Request.ToolCall.RawInput, Locations: p.Request.ToolCall.Locations}
 	details := ansi.Hardwrap(clean(client.ToolText(tool)), w, true)
-	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(6, max(2, m.height-len(p.Request.Options)-12))))
+	var choices []item
+	for _, o := range p.Request.Options {
+		choices = append(choices, item{title: o.Name})
+	}
+	choices = append(choices, item{title: "Cancel"})
+	options := suggestionRows(choices, m.permissionChoice, w, min(len(choices), max(1, height-5)), false)
+	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(details)), 6, max(1, height-lipgloss.Height(options)-2))))
 	v.SetContent(details)
 	v.SetYOffset(m.interactionOffset)
 	body := accent.Bold(true).Render(line(title, w)) + "\n" + v.View() + "\n"
-	for i, o := range p.Request.Options {
-		prefix := "  "
-		if i == m.permissionChoice {
-			prefix = "› "
-		}
-		body += line(prefix+o.Name, w) + "\n"
-	}
-	prefix := "  "
-	if m.permissionChoice == len(p.Request.Options) {
-		prefix = "› "
-	}
-	body += prefix + "Cancel\n" + muted.Render(line("↑↓ choose · Enter confirm · Esc cancel · PgUp/PgDn details", w))
+	body += options + "\n" + muted.Render(line("↑↓ choose · Enter confirm · Esc cancel · PgUp/PgDn details", w))
 	return body
 }
 func (m *model) View() tea.View {
@@ -148,15 +153,47 @@ func (m *model) View() tea.View {
 		return tea.NewView("")
 	}
 	w := max(10, m.width-4)
+	modal := m.picker != nil || m.permission != nil || m.elicitation != nil || m.confirm != nil || m.page != "chat" || m.authWaiting
+	inputView := m.input.View()
+	if modal {
+		value := m.input.Value()
+		if value == "" {
+			value = m.input.Placeholder
+		}
+		inputView = muted.Render(line("❯ "+value, w))
+	}
+	var statusParts []string
+	if m.busy && !modal {
+		elapsed := time.Since(m.startedAt).Round(time.Second)
+		statusParts = append(statusParts, m.spinner.View()+" "+muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
+	}
+	if m.lastError != "" {
+		statusParts = append(statusParts, danger.Render(cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
+	}
+	var badges []string
+	if !modal {
+		if n := len(m.attachments) + len(m.resources); n > 0 {
+			badges = append(badges, muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
+		}
+		if len(m.queued) > 0 {
+			hint := fmt.Sprintf("%d queued · /queue to edit", len(m.queued))
+			if m.queuePaused {
+				hint += " · /queue send to continue"
+			}
+			badges = append(badges, muted.Render(line(hint, w)))
+		}
+	}
+	baseHeight := lipgloss.Height(inputView) + 3
+	for _, part := range append(append([]string{}, statusParts...), badges...) {
+		baseHeight += lipgloss.Height(part)
+	}
+	panelHeight := max(1, m.height-baseHeight-1)
 	var panel string
 	switch {
 	case m.permission != nil:
-		panel = m.permissionView()
+		panel = m.permissionView(panelHeight)
 	case m.elicitation != nil:
-		v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(max(6, m.height-7)))
-		v.SetContent(ansi.Hardwrap(m.elicitationView(), w, true))
-		v.SetYOffset(m.interactionOffset)
-		panel = v.View()
+		panel = m.elicitationPanel(panelHeight)
 	case m.confirm != nil:
 		action := "Delete this session from the agent and local history?"
 		if m.localDelete {
@@ -168,50 +205,41 @@ func (m *model) View() tea.View {
 		if m.authWaiting {
 			title = "Signing in"
 		}
-		panel = accent.Render(title) + "\n" + m.viewport.View() + "\n" + muted.Render("PgUp/PgDn scroll · Esc back")
+		v := m.viewport
+		bottom := v.AtBottom()
+		v.SetHeight(max(1, panelHeight-2))
+		if bottom {
+			v.GotoBottom()
+		}
+		panel = accent.Render(title) + "\n" + v.View() + "\n" + muted.Render("PgUp/PgDn scroll · Esc back")
 	case m.picker != nil:
-		panel = m.pickerView()
+		panel = m.pickerView(panelHeight)
 	case m.completion != nil:
-		panel = m.completionView()
+		panel = m.completionView(panelHeight)
 	}
 	var parts []string
 	// The only managed transcript is the currently streaming tail. Completed
 	// output is printed above the UI, preserving native scrollback and selection.
-	overhead := m.input.Height() + 6
+	overhead := baseHeight
 	if panel != "" {
-		overhead += lipgloss.Height(panel) + 1
+		overhead += lipgloss.Height(panel)
 	}
-	if m.live != "" && m.page == "chat" && m.permission == nil && m.elicitation == nil {
-		available := max(1, m.height-overhead)
+	if m.live != "" && !modal && m.height > overhead {
+		available := m.height - overhead
 		parts = append(parts, cropLines(m.live, available, true))
 	}
-	if m.busy {
-		elapsed := time.Since(m.startedAt).Round(time.Second)
-		parts = append(parts, m.spinner.View()+" "+muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
-	}
-	if m.lastError != "" {
-		parts = append(parts, danger.Render(cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
-	}
+	parts = append(parts, statusParts...)
 	if panel != "" {
 		parts = append(parts, panel)
 	}
-	if n := len(m.attachments) + len(m.resources); n > 0 {
-		parts = append(parts, muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
-	}
-	if len(m.queued) > 0 {
-		hint := fmt.Sprintf("%d queued · /queue to edit", len(m.queued))
-		if m.queuePaused {
-			hint += " · /queue send to continue"
-		}
-		parts = append(parts, muted.Render(line(hint, w)))
-	}
+	parts = append(parts, badges...)
 	parts = append(parts, muted.Render(strings.Repeat("─", w)))
 	before := strings.Join(parts, "\n")
 	inputY := 0
 	if before != "" {
 		inputY = lipgloss.Height(before)
 	}
-	parts = append(parts, m.input.View(), muted.Render(strings.Repeat("─", w)))
+	parts = append(parts, inputView, muted.Render(strings.Repeat("─", w)))
 	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
 	if m.client != nil {
 		if status := m.client.Status(); status != "" {
@@ -228,7 +256,7 @@ func (m *model) View() tea.View {
 	content := strings.Join(parts, "\n")
 	v := tea.NewView(lipgloss.NewStyle().PaddingLeft(1).Render(content))
 	// Do not capture mouse events: copying and terminal scrollback should work.
-	if m.picker == nil && m.permission == nil && m.elicitation == nil && m.page == "chat" {
+	if !modal {
 		v.Cursor = m.input.Cursor()
 		if v.Cursor != nil {
 			v.Cursor.X++

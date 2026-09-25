@@ -9,6 +9,8 @@ require (
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/BrokkAi/acp-go v0.10.0
 	github.com/charmbracelet/x/ansi v0.11.8
+	github.com/charmbracelet/x/vt v0.0.0-20260924144451-d676b019604b
+	github.com/creack/pty v1.1.24
 	github.com/sahilm/fuzzy v0.1.3
 	golang.org/x/term v0.36.0
 )
@@ -19,6 +21,7 @@ require (
 	github.com/aymerick/douceur v0.2.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260922123528-4e49372c11f9 // indirect
+	github.com/charmbracelet/x/exp/ordered v0.1.0 // indirect
 	github.com/charmbracelet/x/exp/slice v0.0.0-20250327172914-2fdc97757edf // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/charmbracelet/x/termios v0.1.1 // indirect
