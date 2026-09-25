@@ -1,0 +1,16 @@
+/bin/
+/dist/
+/micro-acp
+*.test
+*.out
+coverage.out
+
+# Local credentials, runtime data, and editor state
+.env
+.env.*
+!.env.example
+.micro-acp/
+*.log
+.DS_Store
+.idea/
+.vscode/
