@@ -117,6 +117,9 @@ func (m *model) View() tea.View {
 	}
 	header := accent.Bold(true).Render("μ micro-acp") + muted.Render("  /  ") + line(agent, max(8, w-16))
 	subtitle := line(m.options.Cwd, w)
+	if m.catalog.Warning != "" {
+		subtitle = "cached registry · " + line(m.options.Cwd, max(1, w-18))
+	}
 	header += "\n" + muted.Render(subtitle) + "\n" + muted.Render(strings.Repeat("─", w)) + "\n"
 	var body string
 	switch {
@@ -159,7 +162,7 @@ func (m *model) View() tea.View {
 	default:
 		body = plain.Bold(true).Render(line(title, w-20)) + muted.Render("  "+sessionID) + "\n" + m.viewport.View()
 	}
-	body = lipgloss.NewStyle().Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
+	body = lipgloss.NewStyle().Width(w).MaxWidth(w).Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
 	status := m.status
 	if m.lastError != "" {
 		status = m.lastError

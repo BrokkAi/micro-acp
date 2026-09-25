@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/BrokkAi/micro-acp/internal/config"
@@ -169,7 +170,10 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 			return errors.New("choose either --agent, --demo, or a custom command")
 		}
 		command := config.Command{Command: remaining[0], Args: remaining[1:]}
-		if filepath.IsAbs(command.Command) || filepath.Dir(command.Command) != "." {
+		if command.Command == "" {
+			return errors.New("custom agent command cannot be empty")
+		}
+		if filepath.IsAbs(command.Command) || strings.ContainsRune(command.Command, os.PathSeparator) {
 			command.Command, err = filepath.Abs(command.Command)
 			if err != nil {
 				return err
@@ -209,6 +213,14 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 	}
 	if options.Agent == "" {
 		options.Agent = cfg.DefaultAgent
+	}
+	if options.Agent == "demo" && options.Command == nil {
+		self, err := os.Executable()
+		if err != nil {
+			return err
+		}
+		options.Command = &config.Command{Command: self, Args: []string{"__demo-agent"}}
+		options.Offline = true
 	}
 	if *cwd == "" {
 		*cwd, err = os.Getwd()

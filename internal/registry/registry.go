@@ -62,7 +62,7 @@ func (c Client) httpClient() *http.Client {
 	if c.HTTP != nil {
 		return c.HTTP
 	}
-	return &http.Client{Timeout: 30 * time.Second}
+	return &http.Client{Timeout: 5 * time.Minute}
 }
 func validate(index Index) error {
 	if index.Version == "" || len(index.Agents) == 0 {
