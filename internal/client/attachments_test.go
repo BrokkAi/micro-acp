@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
 
@@ -36,5 +37,20 @@ func TestRichAttachmentsAndUnsupportedMedia(t *testing.T) {
 	}
 	if _, err := c.Attachment(cwd); err == nil {
 		t.Fatal("directory accepted as attachment")
+	}
+}
+
+func TestRichContentRoundTripAndPersistence(t *testing.T) {
+	st := store.Store{Directory: t.TempDir()}
+	c := openTest(t, "rich", t.TempDir(), t.TempDir(), st)
+	require(t, c.New())
+	blocks := []acp.Content{acp.NewTextContent("media"), acp.NewImageContent("image/png", "UE5H"), acp.NewAudioContent("audio/wav", "V0FW"), acp.NewTextResourceContent("file:///code.go", "package main"), acp.NewBlobResourceContent("file:///data.bin", "AA=="), acp.NewResourceLinkContent("Guide", "https://example.com/guide")}
+	_, err := c.PromptContent(blocks)
+	require(t, err)
+	s, _ := c.Snapshot()
+	stored, err := st.Load(s.ID)
+	require(t, err)
+	if len(stored.Messages) != 2 || len(stored.Messages[0].Content) != 6 || len(stored.Messages[1].Content) != 5 {
+		t.Fatalf("rich content lost on disk: %+v", stored.Messages)
 	}
 }

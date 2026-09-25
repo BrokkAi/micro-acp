@@ -21,6 +21,10 @@ import (
 func serveRichAgent() {
 	var mu sync.Mutex
 	model, effort, toggle := "fast", "low", false
+	mode := "ask"
+	modes := func() map[string]any {
+		return map[string]any{"currentModeId": mode, "availableModes": []any{map[string]any{"id": "ask", "name": "Ask"}, map[string]any{"id": "code", "name": "Code"}}}
+	}
 	var sessionRequest schema.NewSessionRequest
 	options := func() []any {
 		levels := []any{map[string]any{"value": "low", "name": "Low"}}
@@ -47,12 +51,45 @@ func serveRichAgent() {
 			if p.ClientCapabilities.Elicitation == nil || p.ClientCapabilities.Elicitation.Form == nil || p.ClientCapabilities.Elicitation.URL == nil || p.ClientCapabilities.Auth == nil || p.ClientCapabilities.Auth.Terminal == nil || !*p.ClientCapabilities.Auth.Terminal {
 				return nil, fmt.Errorf("interactive capabilities missing")
 			}
-			return map[string]any{"protocolVersion": 1, "authMethods": []any{map[string]any{"id": "login", "name": "Login"}, map[string]any{"type": "terminal", "id": "terminal-login", "name": "Terminal login", "args": []string{"login"}, "env": map[string]string{"LOGIN_TEST": "yes"}}}, "agentCapabilities": map[string]any{"promptCapabilities": map[string]any{"image": true, "audio": true, "embeddedContext": true}, "mcpCapabilities": map[string]any{"http": true, "sse": true}, "sessionCapabilities": map[string]any{"close": map[string]any{}, "additionalDirectories": map[string]any{}}, "auth": map[string]any{"logout": map[string]any{}}}}, nil
+			if os.Getenv("MICRO_ACP_TEST_ELICIT_INIT") == "yes" {
+				var response schema.CreateElicitationResponse
+				params := map[string]any{"requestId": 1, "mode": "form", "message": "Initialize profile", "requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string"}}}}
+				if err := conn.Call(ctx, "elicitation/create", params, &response); err != nil {
+					return nil, err
+				}
+				if response.Accept == nil {
+					return nil, fmt.Errorf("profile not provided")
+				}
+			}
+			return map[string]any{"protocolVersion": 1, "authMethods": []any{map[string]any{"id": "login", "name": "Login"}, map[string]any{"type": "terminal", "id": "terminal-login", "name": "Terminal login", "args": []string{"login"}, "env": map[string]string{"LOGIN_TEST": "yes"}}}, "agentCapabilities": map[string]any{"promptCapabilities": map[string]any{"image": true, "audio": true, "embeddedContext": true}, "mcpCapabilities": map[string]any{"http": true, "sse": true}, "sessionCapabilities": map[string]any{"close": map[string]any{}, "resume": map[string]any{}, "additionalDirectories": map[string]any{}}, "auth": map[string]any{"logout": map[string]any{}}}}, nil
 		case "session/new":
 			mu.Lock()
 			defer mu.Unlock()
 			_ = json.Unmarshal(raw, &sessionRequest)
-			return map[string]any{"sessionId": "rich-session", "configOptions": options()}, nil
+			// These updates arrive before the session/new response.
+			_ = conn.Notify(ctx, "session/update", map[string]any{"sessionId": "rich-session", "update": map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []any{map[string]any{"name": "compact", "description": "Compact"}}}})
+			return map[string]any{"sessionId": "rich-session", "configOptions": options(), "modes": modes()}, nil
+		case "session/resume":
+			var p schema.ResumeSessionRequest
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return nil, err
+			}
+			if p.SessionID != "rich-session" || p.Cwd == "" {
+				return nil, fmt.Errorf("invalid resume")
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			return map[string]any{"configOptions": options(), "modes": modes()}, nil
+		case "session/set_mode":
+			var p schema.SetSessionModeRequest
+			if err := json.Unmarshal(raw, &p); err != nil {
+				return nil, err
+			}
+			mu.Lock()
+			mode = string(p.ModeID)
+			mu.Unlock()
+			_ = conn.Notify(ctx, "session/update", map[string]any{"sessionId": p.SessionID, "update": map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": p.ModeID}})
+			return map[string]any{}, nil
 		case "authenticate":
 			return map[string]any{}, nil
 		case "session/set_config_option":
@@ -83,6 +120,24 @@ func serveRichAgent() {
 			text := ""
 			if len(p.Prompt) > 0 && p.Prompt[0].Text != nil {
 				text = p.Prompt[0].Text.Text
+			}
+			if text == "media" {
+				if len(p.Prompt) != 6 || p.Prompt[1].Image == nil || p.Prompt[2].Audio == nil || p.Prompt[3].Resource == nil || p.Prompt[4].Resource == nil || p.Prompt[5].ResourceLink == nil {
+					return nil, fmt.Errorf("rich prompt lost content: %s", raw)
+				}
+				for _, content := range p.Prompt[1:] {
+					if err := conn.Notify(ctx, "session/update", acp.NewAgentMessageChunkUpdate(p.SessionID, schema.ContentChunk{Content: content})); err != nil {
+						return nil, err
+					}
+				}
+				return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
+			}
+			if text == "cancel-form" {
+				requestCtx, cancel := context.WithTimeout(ctx, 250*time.Millisecond)
+				defer cancel()
+				var response schema.CreateElicitationResponse
+				_ = conn.Call(requestCtx, "elicitation/create", map[string]any{"sessionId": p.SessionID, "mode": "form", "message": "Cancelled input", "requestedSchema": map[string]any{"type": "object", "properties": map[string]any{}}}, &response)
+				return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 			}
 			if text == "form" || text == "url" {
 				params := map[string]any{"sessionId": p.SessionID, "mode": text, "message": "Please provide input"}
@@ -122,6 +177,16 @@ func serveRichAgent() {
 				if read.Content != "hello\nworld" {
 					return nil, fmt.Errorf("bad file read")
 				}
+				line, limit := uint32(2), uint32(1)
+				if err := conn.Call(ctx, "fs/read_text_file", schema.ReadTextFileRequest{SessionID: p.SessionID, Path: path, Line: &line, Limit: &limit}, &read); err != nil {
+					return nil, err
+				}
+				if strings.TrimSpace(read.Content) != "world" {
+					return nil, fmt.Errorf("line range ignored")
+				}
+				if err := conn.Call(ctx, "fs/read_text_file", schema.ReadTextFileRequest{SessionID: p.SessionID, Path: filepath.Join(setup.Cwd, "..", "outside.txt")}, &read); err == nil {
+					return nil, fmt.Errorf("workspace escape permitted")
+				}
 				var terminal schema.CreateTerminalResponse
 				if err := conn.Call(ctx, "terminal/create", map[string]any{"sessionId": p.SessionID, "command": "sh", "args": []string{"-c", "printf live-output"}, "cwd": setup.AdditionalDirectories[0]}, &terminal); err != nil {
 					return nil, err
@@ -145,7 +210,14 @@ func serveRichAgent() {
 				}
 				return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 			}
+			mu.Lock()
+			configOptions := options()
+			mu.Unlock()
 			updates := []any{
+				map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "Checking the requested change"}},
+				map[string]any{"sessionUpdate": "plan", "entries": []any{map[string]any{"content": "Review the code", "priority": "high", "status": "completed"}}},
+				map[string]any{"sessionUpdate": "session_info_update", "title": "Agent title", "updatedAt": "2026-09-25T12:00:00Z"},
+				map[string]any{"sessionUpdate": "config_option_update", "configOptions": configOptions},
 				map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []any{map[string]any{"name": "compact", "description": "Compact the context"}}},
 				map[string]any{"sessionUpdate": "usage_update", "used": 100, "size": 4096, "cost": map[string]any{"amount": 0.02, "currency": "USD"}},
 				map[string]any{"sessionUpdate": "tool_call", "toolCallId": "edit", "title": "Edit file", "status": "in_progress", "rawInput": map[string]any{"path": "main.go"}, "content": []any{map[string]any{"type": "diff", "path": "main.go", "oldText": "old", "newText": "new"}}},
@@ -248,9 +320,10 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 	c := openTest(t, "rich", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
 	require(t, c.New())
 	selectors := c.Selectors()
-	if len(selectors) != 3 || selectors[0].Choices[0].Group != "Provider" {
+	if len(selectors) != 4 || selectors[0].Choices[0].Group != "Provider" {
 		t.Fatalf("missing grouped selector: %+v", selectors)
 	}
+	require(t, c.Configure("mode", "code"))
 	if err := c.Configure("effort", "high"); err == nil {
 		t.Fatal("accepted effort not offered for current model")
 	}
@@ -260,7 +333,7 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 	_, err := c.Prompt("/compact keep recent work")
 	require(t, err)
 	s, _ := c.Snapshot()
-	if len(s.Commands) != 1 || s.Commands[0].Name != "compact" || s.Usage == nil || s.Usage.Used != 100 {
+	if len(s.Commands) != 1 || s.Commands[0].Name != "compact" || s.Usage == nil || s.Usage.Used != 100 || s.Plan == nil || s.Title != "Agent title" {
 		t.Fatalf("missing session state: %+v", s)
 	}
 	var tool string
@@ -274,7 +347,61 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 			t.Errorf("tool missing %q: %s", want, tool)
 		}
 	}
-	if !strings.Contains(c.Status(), "Deep") || !strings.Contains(c.Status(), "100/4096") {
+	if !strings.Contains(c.Status(), "Deep") || !strings.Contains(c.Status(), "Code") || !strings.Contains(c.Status(), "100/4096") {
 		t.Fatalf("status: %s", c.Status())
+	}
+}
+
+func TestElicitationDuringInitialization(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	events := client.Interactions{Elicitations: make(chan client.Elicitation, 1)}
+	go func() {
+		select {
+		case e := <-events.Elicitations:
+			e.Reply <- acp.AcceptElicitation(nil)
+		case <-ctx.Done():
+		}
+	}()
+	c, err := client.OpenInteractive(ctx, "rich", t.TempDir(), config.Command{Command: os.Args[0], Args: []string{"-test.run=^TestAgentProcess$"}, Env: map[string]string{"MICRO_ACP_TEST_HELPER": "rich", "MICRO_ACP_TEST_ELICIT_INIT": "yes"}}, store.Store{Directory: t.TempDir()}, events)
+	require(t, err)
+	defer c.Shutdown()
+}
+
+func TestAgentCancelsElicitationAndNextTurnWorks(t *testing.T) {
+	c := openTest(t, "rich", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+	require(t, c.New())
+	done := make(chan error, 1)
+	go func() { _, err := c.Prompt("cancel-form"); done <- err }()
+	select {
+	case e := <-c.Elicitations:
+		select {
+		case <-e.Done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("cancel_request did not dismiss form")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("no form request")
+	}
+	require(t, <-done)
+	_, err := c.Prompt("next turn")
+	require(t, err)
+}
+
+func TestResumeKeepsLocalTranscriptAndRefreshesState(t *testing.T) {
+	c := openTest(t, "rich", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+	require(t, c.New())
+	s, _ := c.Snapshot()
+	if len(s.Commands) != 1 {
+		t.Fatal("session/new updates discarded")
+	}
+	_, err := c.Prompt("remember this")
+	require(t, err)
+	s, _ = c.Snapshot()
+	require(t, c.New())
+	require(t, c.Load(s))
+	loaded, _ := c.Snapshot()
+	if len(loaded.Messages) != len(s.Messages) || loaded.ID != s.ID || len(c.Selectors()) != 4 {
+		t.Fatal("resume lost transcript or configuration")
 	}
 }

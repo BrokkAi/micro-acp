@@ -122,6 +122,7 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t})
 	case u.ToolCallUpdate != nil:
 		t := u.ToolCallUpdate
+		found := false
 		for i := len(c.current.Messages) - 1; i >= 0; i-- {
 			m := &c.current.Messages[i]
 			if m.Role == "tool" && m.ID == string(t.ToolCallID) {
@@ -132,8 +133,13 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 				updated := mergeTool(previous, *t)
 				m.Tool = &updated
 				m.Text = ToolText(updated)
+				found = true
 				break
 			}
+		}
+		if !found {
+			updated := mergeTool(schema.ToolCall{ToolCallID: t.ToolCallID}, *t)
+			c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(updated), Tool: &updated})
 		}
 	case u.Plan != nil:
 		c.current.Plan = u.Plan

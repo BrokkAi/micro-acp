@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/acp-go/schema"
@@ -19,6 +20,37 @@ func TestPermissionDefaultsToCancel(t *testing.T) {
 	m.permissionKey("enter")
 	if result := <-p.Reply; result.Cancelled == nil || result.Selected != nil {
 		t.Fatalf("permission approved by default: %+v", result)
+	}
+}
+
+func TestPickerPasteAndAsyncFiltering(t *testing.T) {
+	m := newModel(context.Background(), Options{})
+	m.busy = false
+	m.openPicker("agents", []list.Item{item{title: "Alpha", id: "alpha"}, item{title: "Beta", id: "beta"}})
+	m.Update(tea.KeyPressMsg{Code: '/', Text: "/"})
+	_, cmd := m.Update(tea.PasteMsg{Content: "beta"})
+	var applyMatches func(tea.Cmd)
+	applyMatches = func(cmd tea.Cmd) {
+		if cmd == nil {
+			return
+		}
+		switch msg := cmd().(type) {
+		case tea.BatchMsg:
+			for _, child := range msg {
+				applyMatches(child)
+			}
+		case list.FilterMatchesMsg:
+			m.Update(msg)
+		}
+	}
+	applyMatches(cmd)
+	visible := m.picker.VisibleItems()
+	if len(visible) != 1 || visible[0].(item).id != "beta" {
+		t.Fatalf("filter results not applied: %+v", visible)
+	}
+	m.Update(keyPress(tea.KeyEnter, 0))
+	if selected := m.picker.SelectedItem().(item); selected.id != "beta" {
+		t.Fatal("filter selected wrong agent")
 	}
 }
 func TestCancelledPermissionDoesNotBlockNext(t *testing.T) {

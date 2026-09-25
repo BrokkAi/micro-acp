@@ -71,6 +71,7 @@ func quoteReference(path string) string {
 }
 func (m *model) promptBlocks(text string) ([]acp.Content, error) {
 	blocks := []acp.Content{acp.NewTextContent(text)}
+	blocks = append(blocks, m.resources...)
 	paths := append([]string(nil), m.attachments...)
 	for _, match := range fileReference.FindAllStringSubmatch(text, -1) {
 		for _, path := range match[1:] {

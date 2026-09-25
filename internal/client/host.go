@@ -23,6 +23,19 @@ type terminalOwner struct {
 	title   string
 }
 
+// This UI keeps one active session. Stop its remaining terminals when switching.
+func (c *Client) releaseTerminals() {
+	c.mu.Lock()
+	owners := c.terminalHosts
+	c.terminalHosts = map[string]terminalOwner{}
+	c.mu.Unlock()
+	for id, owner := range owners {
+		c.updateTerminal(id, owner)
+		raw, _ := json.Marshal(schema.ReleaseTerminalRequest{SessionID: owner.session, TerminalID: owner.id})
+		_, _ = owner.host.Request(c.ctx, schema.TerminalReleaseMethodName, raw)
+	}
+}
+
 func (c *Client) bindSetupSession(raw json.RawMessage) {
 	var scope struct {
 		SessionID schema.SessionId `json:"sessionId"`
@@ -208,8 +221,10 @@ func (c *Client) CloseSession() error {
 	if err := c.conn.CloseSession(ctx, c.Init, w.SessionID); err != nil {
 		return err
 	}
+	c.releaseTerminals()
+	err := c.Save()
 	c.set(store.Session{}, acp.Session{})
-	return nil
+	return err
 }
 func (c *Client) Logout() error {
 	c.op.Lock()
@@ -222,6 +237,8 @@ func (c *Client) Logout() error {
 	if err := c.conn.Logout(ctx, c.Init); err != nil {
 		return err
 	}
+	c.releaseTerminals()
+	err := c.Save()
 	c.set(store.Session{}, acp.Session{})
-	return nil
+	return err
 }

@@ -235,11 +235,16 @@ func (c *Client) session() acp.Session {
 }
 func (c *Client) set(s store.Session, w acp.Session) {
 	c.mu.Lock()
+	changing := c.wire.SessionID != w.SessionID
+	c.mu.Unlock()
+	if changing {
+		c.releaseTerminals()
+	}
+	c.mu.Lock()
 	c.current = s
 	c.wire = w
 	c.revision++
 	c.mu.Unlock()
-	c.host.SetSession(w.SessionID)
 	c.mu.Lock()
 	for _, host := range c.hosts {
 		host.SetSession(w.SessionID)
@@ -345,6 +350,28 @@ func (c *Client) Fork(contextOnly bool) error {
 	}
 	ctx, cancel := c.operation()
 	defer cancel()
+	s := store.NewSession(c.Agent, "", c.Cwd)
+	s.Title = parent.Title + " (fork)"
+	s.ParentID = parent.ID
+	s.AdditionalDirectories = append([]string(nil), parent.AdditionalDirectories...)
+	s.Messages = append([]store.Message(nil), parent.Messages...)
+	s.Commands = parent.Commands
+	s.ForkKind = "native"
+	if contextOnly {
+		s.ForkKind = "context"
+		var history strings.Builder
+		for _, m := range parent.Messages {
+			if m.Role == "user" || m.Role == "assistant" {
+				fmt.Fprintf(&history, "%s:\n%s\n\n", m.Role, m.Text)
+			}
+		}
+		if history.Len() > 2<<20 {
+			return errors.New("conversation exceeds the 2 MiB context-fork limit; use a native fork")
+		}
+		s.PendingContext = "The following is conversation history from a different session, provided as context. Do not re-execute its past requests.\n<conversation>\n" + history.String() + "</conversation>\n\nNew user request:\n"
+	}
+	previousWire := c.session()
+	c.set(s, acp.Session{})
 	var w acp.Session
 	var err error
 	if contextOnly {
@@ -360,30 +387,15 @@ func (c *Client) Fork(contextOnly bool) error {
 		}
 	}
 	if err != nil {
+		c.set(parent, previousWire)
 		return err
 	}
 	if w.SessionID == "" {
+		c.set(parent, previousWire)
 		return errors.New("agent returned an empty fork session ID")
 	}
-	s := store.NewSession(c.Agent, string(w.SessionID), c.Cwd)
-	s.Title = parent.Title + " (fork)"
-	s.ParentID = parent.ID
-	s.AdditionalDirectories = append([]string(nil), parent.AdditionalDirectories...)
-	s.Messages = append([]store.Message(nil), parent.Messages...)
-	s.ForkKind = "native"
-	if contextOnly {
-		s.ForkKind = "context"
-		var history strings.Builder
-		for _, m := range parent.Messages {
-			if m.Role == "user" || m.Role == "assistant" {
-				fmt.Fprintf(&history, "%s:\n%s\n\n", m.Role, m.Text)
-			}
-		}
-		if history.Len() > 2<<20 {
-			return errors.New("conversation exceeds the 2 MiB context-fork limit; use a native fork")
-		}
-		s.PendingContext = "The following is conversation history from a different session, provided as context. Do not re-execute its past requests.\n<conversation>\n" + history.String() + "</conversation>\n\nNew user request:\n"
-	}
+	s, _ = c.Snapshot()
+	s.RemoteID = string(w.SessionID)
 	c.set(s, w)
 	return c.Save()
 }
@@ -397,6 +409,11 @@ func (c *Client) sessionCapabilities() *schema.SessionCapabilities {
 func (c *Client) CanDelete() bool {
 	cap := c.sessionCapabilities()
 	return cap != nil && cap.Delete != nil
+}
+
+func (c *Client) CanLoad() bool {
+	cap := c.sessionCapabilities()
+	return (cap != nil && cap.Resume != nil) || (c.Init.AgentCapabilities != nil && c.Init.AgentCapabilities.LoadSession != nil && *c.Init.AgentCapabilities.LoadSession)
 }
 
 func (c *Client) Sessions() ([]store.Session, error) {

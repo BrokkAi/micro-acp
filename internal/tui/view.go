@@ -189,8 +189,8 @@ func (m *model) View() tea.View {
 	}
 	body = lipgloss.NewStyle().Width(w).MaxWidth(w).Height(max(3, m.height-12)).MaxHeight(max(3, m.height-12)).Render(body)
 	status := m.status
-	if len(m.attachments) > 0 {
-		status = fmt.Sprintf("%d attachments · %s", len(m.attachments), status)
+	if n := len(m.attachments) + len(m.resources); n > 0 {
+		status = fmt.Sprintf("%d attachments · %s", n, status)
 	}
 	if m.lastError != "" {
 		status = m.lastError

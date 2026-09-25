@@ -55,6 +55,7 @@ func TestAgentProcess(t *testing.T) {
 			if p.SessionID != "native-1" || p.Cwd == "" {
 				return nil, fmt.Errorf("incorrect fork request: %s", raw)
 			}
+			_ = conn.Notify(ctx, "session/update", map[string]any{"sessionId": "native-fork", "update": map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []any{map[string]any{"name": "branch", "description": "Branch command"}}}})
 			return schema.NewSessionResponse{SessionID: "native-fork"}, nil
 		case "session/prompt":
 			var p schema.PromptRequest
@@ -148,6 +149,9 @@ func TestNativeForkUsesAdvertisedCapability(t *testing.T) {
 	fork, _ := c.Snapshot()
 	if fork.RemoteID != "native-fork" || fork.ParentID != parent.ID || fork.ForkKind != "native" || len(fork.Messages) != 2 {
 		t.Fatalf("incorrect fork: %+v", fork)
+	}
+	if len(fork.Commands) != 1 || fork.Commands[0].Name != "branch" {
+		t.Fatal("fork setup notifications discarded")
 	}
 	if err := c.Delete(fork, false); err == nil {
 		t.Fatal("unadvertised delete was accepted")

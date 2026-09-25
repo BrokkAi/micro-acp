@@ -47,6 +47,7 @@ type connectedMsg struct {
 	client *client.Client
 	err    error
 }
+type disconnectedMsg struct{ client *client.Client }
 type resultMsg struct {
 	status string
 	err    error
@@ -90,6 +91,7 @@ type model struct {
 	historyIndex      int
 	draft             string
 	attachments       []string
+	resources         []acp.Content
 	filePrefix        string
 	elicitation       *elicitationUI
 	elicitationQueue  []client.Elicitation
@@ -175,6 +177,7 @@ func (m *model) connect(selected item) tea.Cmd {
 	m.elicitation = nil
 	m.elicitationQueue = nil
 	m.attachments = nil
+	m.resources = nil
 	m.retryOperation = nil
 	return func() tea.Msg {
 		if old != nil {
@@ -283,7 +286,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmd = m.perform("Creating session…", c.New)
 		}
-		return m, cmd
+		return m, tea.Batch(cmd, func() tea.Msg { <-c.Done(); return disconnectedMsg{c} })
+	case disconnectedMsg:
+		if msg.client == m.client {
+			m.lastError = "Agent disconnected. /logs shows details; /reconnect restarts it."
+			m.status = "Disconnected"
+		}
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
@@ -306,7 +314,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.history = nil
 			for _, entry := range s.Messages {
 				if entry.Role == "user" {
-					m.history = append(m.history, entry.Text)
+					text := entry.Text
+					if len(entry.Content) > 0 && entry.Content[0].Text != nil {
+						text = entry.Content[0].Text.Text
+					}
+					m.history = append(m.history, text)
 				}
 			}
 			m.historyIndex = len(m.history)
@@ -349,7 +361,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			c := m.client
 			if m.resumeTarget != nil {
 				m.options.Resume = m.resumeTarget
-			} else if s, _ := c.Snapshot(); s.ID != "" {
+			} else if s, _ := c.Snapshot(); s.ID != "" && c.CanLoad() {
 				m.options.Resume = &s
 			}
 			return m, m.connect(item{title: c.Agent, id: c.Agent, value: c.Invocation()})
@@ -556,7 +568,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if k == "enter" && !m.busy {
 			text := strings.TrimSpace(m.input.Value())
-			if text == "" {
+			if text == "" && len(m.attachments) == 0 && len(m.resources) == 0 {
 				return m, nil
 			}
 			m.input.Reset()
@@ -565,6 +577,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.client == nil {
 				m.lastError = "Choose an agent with /agents first"
+				m.input.SetValue(text)
 				return m, nil
 			}
 			return m, m.sendPrompt(text)
@@ -580,6 +593,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.permission != nil || m.confirm != nil {
 		return m, nil
+	}
+	switch m.page {
+	case "agents", "sessions", "commands", "settings", "choices", "files", "auth":
+		var cmd tea.Cmd
+		m.picker, cmd = m.picker.Update(msg)
+		return m, cmd
 	}
 	if m.page == "chat" {
 		var cmd tea.Cmd

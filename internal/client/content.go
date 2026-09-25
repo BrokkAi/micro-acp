@@ -36,6 +36,9 @@ func ToolText(tool schema.ToolCall) string {
 	if tool.Status != nil {
 		fmt.Fprintf(&text, " · %s", *tool.Status)
 	}
+	if tool.Kind != nil {
+		fmt.Fprintf(&text, " · %s", *tool.Kind)
+	}
 	if tool.Name != nil {
 		fmt.Fprintf(&text, "\nTool: %s", *tool.Name)
 	}
