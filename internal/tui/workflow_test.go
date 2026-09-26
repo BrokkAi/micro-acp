@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,5 +96,35 @@ func TestInvalidReferenceKeepsDraft(t *testing.T) {
 	m.sendPrompt(m.input.Value())
 	if m.input.Value() != "Read @missing.go" || m.lastError == "" || m.prompting {
 		t.Fatal("invalid attachment discarded or sent the draft")
+	}
+}
+
+func TestQueuePickerTracksAutomaticDequeue(t *testing.T) {
+	for _, count := range []int{1, 2} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			m := connectedComposer(t)
+			m.busy, m.prompting = true, true
+			m.sendPrompt("first queued prompt")
+			if count == 2 {
+				m.sendPrompt("second queued prompt")
+			}
+			m.command("/queue")
+			m.picker.index = count - 1
+			// Finishing the active turn starts the first queued prompt while
+			// the user is still looking at the queue picker.
+			m.Update(resultMsg{status: "Ready", prompt: true})
+			defer func() {
+				if p := recover(); p != nil {
+					t.Errorf("selecting a queue entry after automatic dequeue panicked: %v", p)
+				}
+			}()
+			m.Update(keyPress(tea.KeyEnter, 0))
+			if count == 1 && m.input.Value() != "" {
+				t.Fatal("already submitted prompt was restored for editing")
+			}
+			if count == 2 && m.input.Value() != "second queued prompt" {
+				t.Fatalf("edited the wrong prompt: %q", m.input.Value())
+			}
+		})
 	}
 }
