@@ -58,3 +58,25 @@ func TestRejectLocalTraversalAndCorruptData(t *testing.T) {
 		t.Fatal("corrupt session silently ignored")
 	}
 }
+
+func TestListSkipsSessionDeletedAfterDirectoryRead(t *testing.T) {
+	s := Store{Directory: t.TempDir()}
+	kept := NewSession("agent", "kept", t.TempDir())
+	deleted := NewSession("agent", "deleted", kept.Cwd)
+	for _, session := range []Session{kept, deleted} {
+		if err := s.Save(session); err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(s.Directory, "sessions"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Delete(deleted.ID); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := s.loadEntries(entries)
+	if err != nil || len(listed) != 1 || listed[0].ID != kept.ID {
+		t.Fatalf("listing raced with deletion: %+v, %v", listed, err)
+	}
+}

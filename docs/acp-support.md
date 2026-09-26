@@ -1,6 +1,6 @@
 # ACP support
 
-Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go v0.10.0`. All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
+Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
 
 ## Methods
 
