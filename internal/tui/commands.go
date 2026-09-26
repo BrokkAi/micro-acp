@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"net/url"
 	"strings"
 
@@ -15,7 +14,7 @@ var commands = []item{
 	{title: "Mode", description: "Choose the agent's operating mode", id: "/mode"},
 	{title: "Reasoning effort", description: "Choose how much the model reasons", id: "/effort"},
 	{title: "Tool details", description: "Expand tools, reasoning and full output · Ctrl+O", id: "/details"},
-	{title: "Queued prompts", description: "Edit queued prompts; /queue send continues a paused queue", id: "/queue"},
+	{title: "Queued prompts", description: "Edit or remove prompts · /queue send resumes · /queue clear removes all", id: "/queue"},
 
 	{title: "New session", description: "Start a fresh conversation", id: "/new"},
 	{title: "Close session", description: "Close the active session while keeping its history", id: "/close"},
@@ -186,8 +185,17 @@ func (m *model) command(text string) tea.Cmd {
 		m.viewport.GotoBottom()
 		return nil
 	case "/queue":
-		if arg == "send" && !m.busy && len(m.queued) > 0 {
-			return m.sendQueued()
+		if arg == "send" {
+			m.queuePaused = false
+			return m.dispatchQueue()
+		}
+		if arg == "clear" {
+			m.queued = nil
+			m.queuePaused = false
+			if m.editing != nil {
+				m.restoreQueueDraft()
+			}
+			return nil
 		}
 		m.openPicker("queue", m.queueItems())
 		return nil
@@ -233,31 +241,5 @@ func (m *model) allCommands() []item {
 }
 
 func (m *model) sendPrompt(text string) tea.Cmd {
-	if m.client == nil {
-		m.lastError = "Choose an agent with /agents first"
-		return nil
-	}
-	if m.busy && !m.prompting {
-		m.lastError = "Wait for the agent connection to finish"
-		return nil
-	}
-	blocks, err := m.promptBlocks(text)
-	if err != nil {
-		m.lastError = err.Error()
-		return nil
-	}
-	s, _ := m.client.Snapshot()
-	m.queueSequence++
-	q := queuedPrompt{id: m.queueSequence, text: text, blocks: blocks, attachments: m.attachments, resources: m.resources, sessionID: s.ID}
-	m.input.Reset()
-	m.completion = nil
-	m.attachments = nil
-	m.resources = nil
-	if m.prompting {
-		m.queued = append(m.queued, q)
-		m.status = fmt.Sprintf("%d prompt(s) queued", len(m.queued))
-		return nil
-	}
-	m.queuePaused = false
-	return m.startPrompt(q)
+	return m.submitPrompt(text, false)
 }

@@ -57,12 +57,14 @@ type permissionMsg struct{ permission client.Permission }
 type pulseMsg time.Time
 type printedMsg struct{}
 type queuedPrompt struct {
-	id          uint64
-	text        string
-	blocks      []acp.Content
-	attachments []string
-	resources   []acp.Content
-	sessionID   string
+	id            uint64
+	text          string
+	blocks        []acp.Content
+	attachments   []string
+	resources     []acp.Content
+	sessionID     string
+	steer         bool
+	deliveryError string
 }
 
 type model struct {
@@ -111,6 +113,9 @@ type model struct {
 	queued                     []queuedPrompt
 	queueSequence              uint64
 	queuePaused                bool
+	steering                   *queuedPrompt
+	editing                    *queuedPrompt
+	savedDraft                 *queuedPrompt
 	printedSession             string
 	printedIndex, streamPrefix int
 	live                       string
@@ -402,6 +407,9 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
+		if m.steering != nil {
+			m.busy = true
+		}
 		if msg.prompt {
 			m.filesLoaded = false
 		}
@@ -439,9 +447,11 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		}
 		m.syncTranscript()
 		m.rebuildHistory()
-		if msg.prompt && msg.err == nil && !m.queuePaused && len(m.queued) > 0 {
-			return m, m.sendQueued()
+		if msg.prompt && msg.err == nil {
+			return m, m.dispatchQueue()
 		}
+	case steeredMsg:
+		return m, m.steeringResult(msg)
 	case sessionsMsg:
 		m.busy = false
 		m.status = "Ready"
@@ -599,6 +609,11 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		m.viewport, cmd = m.viewport.Update(msg)
 		return cmd
 	}
+	if k == "esc" && m.editing != nil {
+		m.insertQueued(*m.editing)
+		m.restoreQueueDraft()
+		return m.dispatchQueue()
+	}
 	if handled, cmd := m.completionKey(msg); handled {
 		return cmd
 	}
@@ -635,6 +650,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		return nil
 	case "alt+up", "up":
+		if k == "alt+up" && len(m.queued) > 0 && m.editing == nil {
+			m.editQueued(len(m.queued) - 1)
+			return nil
+		}
 		if (k == "alt+up" || m.input.Line() == 0) && len(m.history) > 0 {
 			if m.historyIndex == len(m.history) {
 				m.draft = m.input.Value()
@@ -655,14 +674,23 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 			m.input.MoveToEnd()
 			return nil
 		}
+	case "tab":
+		if m.prompting || m.steering != nil || len(m.queued) > 0 || m.editing != nil {
+			return m.submitPrompt(strings.TrimSpace(m.input.Value()), true)
+		}
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" && len(m.attachments) == 0 && len(m.resources) == 0 {
 			return nil
 		}
-		if strings.HasPrefix(text, "/") {
+		if strings.HasPrefix(text, "/") && m.editing == nil {
 			m.input.Reset()
-			return m.command(text)
+			cmd := m.command(text)
+			if m.lastError != "" && m.input.Value() == "" {
+				m.input.SetValue(text)
+				m.input.MoveToEnd()
+			}
+			return cmd
 		}
 		return m.sendPrompt(text)
 	}
@@ -759,11 +787,14 @@ func (m *model) startPrompt(q queuedPrompt) tea.Cmd {
 }
 
 func (m *model) sendQueued() tea.Cmd {
+	if len(m.queued) == 0 || m.busy || m.steering != nil || m.editing != nil {
+		return nil
+	}
 	q := m.queued[0]
 	s, _ := m.client.Snapshot()
 	if q.sessionID != s.ID {
 		m.queuePaused = true
-		m.lastError = "Queued prompts belong to another session. Resume it or use /queue to edit them."
+		m.lastError = "Queued prompts belong to another session. Resume it or remove them with /queue."
 		return nil
 	}
 	m.queued = m.queued[1:]

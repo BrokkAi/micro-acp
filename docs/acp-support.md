@@ -47,7 +47,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | `available_commands_update` | Refreshes inline slash suggestions; resolves client command collisions through `/agent`. |
 | `current_mode_update` | Updates the current legacy mode. |
 | `config_option_update` | Refreshes open selectors, completions, and the persistent status line, including custom options, On/Off values, and model-dependent choices. |
-| `session_info_update` | Updates title and timestamp. |
+| `session_info_update` | Updates title and timestamp; Codex thread-status metadata also tracks detached steering continuations. |
 | `usage_update` | Stores used/capacity and reported cost; the status line displays the percentage of context remaining. |
 
 Prompts can carry text, resource links, images, audio, embedded text resources and embedded binary resources. Capability checks happen before sending. Full content blocks persist in local session files. The TUI renders text/resources and labels images, audio and binary data; it does not render bitmap images or play audio. Tool content supports text/resources, diffs and terminal references. `TestRichContentRoundTripAndPersistence` verifies these survive the actual stdio transport and disk storage.
@@ -56,6 +56,7 @@ Form fields support the restricted flat schema: strings, integers, numbers, bool
 
 ## Extensions and boundaries
 
+- `_session/steering`: enabled only by top-level `initialize._meta.steering.supported`. Enter injects guidance; Tab retains a local FIFO follow-up. The client requests `idleBehavior: promptRequired`, so Claude can return unconsumed late input for one normal `session/prompt`. Codex's `startedNewTurn` is already consumed: its `_meta.codex.threadStatus` updates keep the turn busy until completion. Accepted steering is recorded once; rejected or ambiguous deliveries remain in a paused queue. See the [Claude example](https://github.com/agentclientprotocol/claude-agent-acp/blob/main/examples/steering.ts) and [Codex extension](https://github.com/agentclientprotocol/codex-acp/blob/main/src/AcpExtensions.ts). In-memory ACP transport tests cover acceptance, non-delivery, unknown outcomes, and detached completion before/after acknowledgment; TUI tests cover queue order, editing, deletion, draft/context retention, and fallback.
 - `session/fork`: implemented through the SDK's unstable v1 schema only when advertised. Replayed history replaces the inherited transcript; agents that do not replay retain the saved history. Tested by `TestNativeForkUsesAdvertisedCapability` and `TestNativeForkReplayReplacesInheritedHistory`. `/fork --context` is a separately labeled text-context fallback.
 - MCP configuration: stdio, HTTP and SSE definitions are forwarded during session operations. The agent connects to and operates those servers. This client is not an MCP server or an MCP-over-ACP proxy.
 - Additional directories: passed only through supported session operations, restored with saved sessions, and included in client callback routing.

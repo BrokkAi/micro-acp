@@ -54,6 +54,8 @@ type Client struct {
 	shutdownOnce     sync.Once
 	shutdownErr      error
 	op               sync.Mutex
+	steerOp          sync.Mutex
+	steering         steeringState
 	mu               sync.Mutex
 	current          store.Session
 	wire             acp.Session
@@ -214,6 +216,13 @@ func (c *Client) Save() error {
 	if s.ID == "" || s.RemoteID == "" {
 		return nil
 	}
+	messages := s.Messages[:0]
+	for _, message := range s.Messages {
+		if !message.Pending {
+			messages = append(messages, message)
+		}
+	}
+	s.Messages = messages
 	return c.store.Save(s)
 }
 
@@ -545,6 +554,7 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	c.mu.Lock()
 	c.turnCancel = cancel
 	c.turnDone = done
+	c.steering = steeringState{wake: make(chan struct{}), disabled: c.steering.disabled, sequence: c.steering.sequence}
 	c.permissionCtx = permissions
 	c.permissionCancel = stopPermissions
 	c.cancelRequested = false
@@ -574,12 +584,18 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 		}
 	}()
 	if err = c.Save(); err != nil {
+		// A follow-up can already be waiting for this prompt's first activity.
+		// Release it as unconsumed even when the initial save prevents dispatch.
+		err = errors.Join(err, c.finishSteering(ctx))
 		return "", err
 	}
 	if s.PendingContext != "" {
 		blocks = append([]acp.Content{acp.NewTextContent(s.PendingContext)}, blocks...)
 	}
 	reason, err = c.conn.PromptContent(ctx, c.Init, c.session(), blocks)
+	if steerErr := c.finishSteering(ctx); steerErr != nil {
+		err = errors.Join(err, steerErr)
+	}
 	c.mu.Lock()
 	cancelled := c.cancelRequested
 	if reason == schema.StopReasonCancelled {
@@ -607,6 +623,7 @@ func (c *Client) Cancel() error {
 	stopPermissions := c.permissionCancel
 	if c.turnDone != nil {
 		c.cancelRequested = true
+		c.wakeSteering()
 		c.cancelTurnTools()
 	}
 	id := c.wire.SessionID

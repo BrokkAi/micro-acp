@@ -101,8 +101,12 @@ func TestQueuedPromptEditRetainsContextWithoutDuplicatingFiles(t *testing.T) {
 	m.command("/queue")
 	m.input.SetValue("unfinished draft")
 	m.Update(keyPress(tea.KeyEnter, 0))
+	if m.input.Value() != "Read @main.go" || m.savedDraft == nil || m.savedDraft.text != "unfinished draft" {
+		t.Fatal("editing did not preserve the current draft")
+	}
+	m.Update(keyPress(tea.KeyEscape, 0))
 	if m.input.Value() != "unfinished draft" || len(m.queued) != 1 {
-		t.Fatal("editing discarded the current draft")
+		t.Fatal("cancelling queue edit did not restore the draft and queued prompt")
 	}
 }
 

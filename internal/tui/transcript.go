@@ -144,6 +144,9 @@ func (m *model) syncTranscript() {
 	for m.printedIndex < len(s.Messages) {
 		i := m.printedIndex
 		message := s.Messages[i]
+		if message.Pending {
+			break
+		}
 		if message.Role == "plan" {
 			// Plans update the live checklist; retain snapshots only in details.
 			m.printedIndex++
@@ -189,6 +192,9 @@ func (m *model) syncTranscript() {
 	var live []string
 	for i := m.printedIndex; i < len(s.Messages); i++ {
 		message := s.Messages[i]
+		if message.Pending {
+			break
+		}
 		if message.Role == "plan" {
 			continue
 		}
@@ -210,6 +216,9 @@ func (m *model) refreshDetails() {
 	bottom := m.viewport.AtBottom()
 	var parts []string
 	for _, message := range s.Messages {
+		if message.Pending {
+			break
+		}
 		parts = append(parts, m.messageView(message, true, false))
 	}
 	m.viewport.SetContent(strings.Join(parts, "\n"))

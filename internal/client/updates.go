@@ -84,6 +84,10 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		return nil
 	}
 	u := update.Update
+	if c.turnDone != nil && !c.steering.ready && (u.AgentMessageChunk != nil || u.AgentThoughtChunk != nil || u.ToolCall != nil || u.Plan != nil) {
+		c.steering.ready = true
+		c.wakeSteering()
+	}
 	if c.current.RemoteID == "" && update.SessionID != "" {
 		c.current.RemoteID = string(update.SessionID)
 		c.wire.SessionID = update.SessionID
@@ -150,6 +154,7 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		}
 		c.current.Messages = append(c.current.Messages, store.Message{Role: "plan", Text: strings.Join(lines, "\n")})
 	case u.SessionInfoUpdate != nil:
+		c.steeringStatus(u.SessionInfoUpdate.Meta)
 		if u.SessionInfoUpdate.Title != nil {
 			c.current.Title = *u.SessionInfoUpdate.Title
 		}
