@@ -78,6 +78,12 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 			mark = "×"
 			style = m.theme.danger
 		}
+		if message.Cancelled {
+			mark = "×"
+			style = m.theme.amber
+			title += " · cancelled"
+			text = "Cancelled by client\nLast agent update:\n" + text
+		}
 		summary := style.Render(mark+" ") + line(title, width-2)
 		if details {
 			return summary + "\n" + ansi.Hardwrap(text, width, true) + "\n"

@@ -10,7 +10,23 @@ import (
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
+	"github.com/BrokkAi/micro-acp/internal/store"
+	"github.com/charmbracelet/x/ansi"
 )
+
+func TestCancelledToolPresentationRetainsAgentDetails(t *testing.T) {
+	m := newModel(context.Background(), Options{})
+	status := schema.ToolCallStatusInProgress
+	tool := &schema.ToolCall{ToolCallID: "test", Title: "Run tests", Status: &status}
+	message := store.Message{Role: "tool", Tool: tool, Text: client.ToolText(*tool), Cancelled: true}
+	if summary := ansi.Strip(m.messageView(message, false, false)); !strings.Contains(summary, "× Run tests · cancelled") {
+		t.Fatalf("cancelled tool still looks active: %s", summary)
+	}
+	details := ansi.Strip(m.messageView(message, true, false))
+	if !strings.Contains(details, "Cancelled by client") || !strings.Contains(details, "Last agent update:\nRun tests · in_progress") {
+		t.Fatalf("missing cancellation or original details: %s", details)
+	}
+}
 
 func TestPermissionDefaultsToCancel(t *testing.T) {
 	m := newModel(context.Background(), Options{Config: config.Config{RegistryURL: config.RegistryURL}, Cwd: "/tmp"})

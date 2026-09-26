@@ -61,6 +61,7 @@ type Client struct {
 	replaying        bool
 	turnCancel       context.CancelFunc
 	turnDone         chan struct{}
+	turnStart        int
 	permissionCtx    context.Context
 	permissionCancel context.CancelFunc
 	cancelRequested  bool
@@ -547,6 +548,7 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	c.permissionCtx = permissions
 	c.permissionCancel = stopPermissions
 	c.cancelRequested = false
+	c.turnStart = len(c.current.Messages)
 	c.current.Messages = append(c.current.Messages, store.Message{Role: "user", Text: text, Content: blocks})
 	if c.current.Title == "New session" {
 		title := []rune(strings.Join(strings.Fields(text), " "))
@@ -580,6 +582,9 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	reason, err = c.conn.PromptContent(ctx, c.Init, c.session(), blocks)
 	c.mu.Lock()
 	cancelled := c.cancelRequested
+	if reason == schema.StopReasonCancelled {
+		c.cancelTurnTools()
+	}
 	c.mu.Unlock()
 	var rpcErr *acp.RPCError
 	if cancelled && errors.As(err, &rpcErr) && rpcErr.Code == -32800 {
@@ -602,6 +607,7 @@ func (c *Client) Cancel() error {
 	stopPermissions := c.permissionCancel
 	if c.turnDone != nil {
 		c.cancelRequested = true
+		c.cancelTurnTools()
 	}
 	id := c.wire.SessionID
 	c.mu.Unlock()
