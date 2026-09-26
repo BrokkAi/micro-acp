@@ -15,7 +15,7 @@ Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to c
 | `session/list` | Combines saved sessions with paginated remote results, filters by workspace, deduplicates. | Lifecycle tests. |
 | `session/close` | `/close`; saves local history, closes remote session, releases terminals. | Authentication/lifecycle fixture. |
 | `session/delete` | `/delete` or session picker; explicit confirmation, remote deletion followed by local removal. `/forget` is local only. | Lifecycle tests. |
-| `session/prompt` | Multiline composer, streamed response, rich content, agent slash commands. | Lifecycle, configuration and rich content tests. |
+| `session/prompt` | Multiline composer, streamed response, rich content, agent slash commands. Token/request limits and refusals show their stop reason and pause queued prompts. | Lifecycle, configuration, rich content and stop-reason tests. |
 | `session/cancel` | Esc/Ctrl+C stops a turn, marks its unfinished tools cancelled locally, cancels pending interactions, waits for completion; disconnects unresponsive processes. Final agent tool results take precedence over local cancellation. | Permission/cancellation tests. |
 | `session/set_mode` | `/mode` for agents offering legacy session modes. | `TestAgentDrivenConfigurationAndRichUpdates`. |
 | `session/set_config_option` | `/config` (`/settings` alias), option/value completion, plus `/model`, `/mode`, `/effort`; grouped choices, booleans, arbitrary categories, and dependent option refresh. | `TestAgentDrivenConfigurationAndRichUpdates`. |
@@ -42,7 +42,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | `agent_message_chunk` | Streams Markdown, retains message IDs and non-text blocks. |
 | `agent_thought_chunk` | Compact thinking entries; full text in Ctrl+O details. |
 | `tool_call` | Compact title/status and file-change summary; Ctrl+O exposes kind, name, inputs, content, file locations and outputs. |
-| `tool_call_update` | Merges partial updates without discarding omitted fields; accepts explicit empty lists. |
+| `tool_call_update` | Merges partial updates without discarding omitted fields; null raw input/output preserves prior values, while explicit empty lists replace them. |
 | `plan` | Live checklist above the prompt with status markers, priorities and completion counts. Long plans follow the active step; Ctrl+O retains full update history. |
 | `available_commands_update` | Refreshes inline slash suggestions; resolves client command collisions through `/agent`. |
 | `current_mode_update` | Updates the current legacy mode. |
