@@ -36,10 +36,10 @@ The agent picker and `micro-acp agents` also include these built-in entries:
 | Agent ID | Server | Launch |
 | --- | --- | --- |
 | `anvil` | [BrokkAi/anvil](https://github.com/BrokkAi/anvil) | `npx --yes @brokkai/anvil@latest`; requires Node.js/npm. |
-| `muse-acp` | [BrokkAi/muse-acp](https://github.com/BrokkAi/muse-acp) | Downloads the latest native release; requires Muse Code installed and authenticated. |
+| `muse-acp` | [BrokkAi/muse-acp](https://github.com/BrokkAi/muse-acp) | `npx --yes @brokkai/muse-acp@latest`; requires Node.js/npm and Muse Code installed and authenticated. |
 | `draupnir` | [foundev/draupnir](https://github.com/foundev/draupnir) | Downloads the latest native release. |
 
-For example, run `micro-acp --agent anvil`, `micro-acp --agent muse-acp`, or `micro-acp --agent draupnir`. Native releases support Linux (glibc) and macOS on amd64 and arm64; Draupnir uses its universal macOS archive. Downloads are verified against GitHub's SHA-256 asset digest and installed in the private cache. GitHub release metadata is checked when connecting, with cached metadata used if that request fails. `--offline` requires a previously cached native release and executable. Built-in entries remain visible when the official registry is unavailable. Matching published registry entries take precedence over built-ins, and custom agent configurations take precedence over both.
+For example, run `micro-acp --agent anvil`, `micro-acp --agent muse-acp`, or `micro-acp --agent draupnir`. Draupnir downloads support Linux (glibc) and macOS on amd64 and arm64, using its universal macOS archive. Downloads are verified against GitHub's SHA-256 asset digest and installed in the private cache. GitHub release metadata is checked when connecting, with cached metadata used if that request fails. `--offline` requires a previously cached native release and executable. Built-in entries remain visible when the official registry is unavailable. Matching published registry entries take precedence over built-ins, and custom agent configurations take precedence over both.
 
 ## Custom agents
 

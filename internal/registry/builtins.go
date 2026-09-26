@@ -27,9 +27,11 @@ type releaseSource struct {
 func WithBuiltins(agents []Agent) []Agent {
 	anvil := Agent{ID: "anvil", Name: "Anvil", Version: "latest", Description: "BrokkAi/anvil · portable ACP agent · npm"}
 	anvil.Distribution.NPX = &Package{Package: "@brokkai/anvil@latest"}
+	muse := Agent{ID: "muse-acp", Name: "Muse ACP", Version: "latest", Description: "BrokkAi/muse-acp · npm · requires Muse Code and a Muse login"}
+	muse.Distribution.NPX = &Package{Package: "@brokkai/muse-acp@latest"}
 	builtins := []Agent{
 		anvil,
-		{ID: "muse-acp", Name: "Muse ACP", Version: "latest", Description: "BrokkAi/muse-acp · requires Muse Code and a Muse login", release: &releaseSource{repository: "BrokkAi/muse-acp", prefix: "muse-acp", executable: "muse-acp", extension: ".tar.gz"}},
+		muse,
 		{ID: "draupnir", Name: "Draupnir", Version: "latest", Description: "foundev/draupnir · portable ACP agent · native release", release: &releaseSource{repository: "foundev/draupnir", prefix: "brokk-draupnir", executable: "draupnir", extension: ".zip", universalMac: true}},
 	}
 	result := append([]Agent(nil), agents...)

@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,18 +43,20 @@ func TestBuiltinCatalogAndRegistryPrecedence(t *testing.T) {
 	}
 }
 
-func TestAnvilUsesPublishedNpmPackage(t *testing.T) {
+func TestBuiltinNpmPackages(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "npx"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
-	command, err := (Client{}).Resolve(context.Background(), builtin(t, "anvil"), false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if command.Command != "npx" || strings.Join(command.Args, " ") != "--yes @brokkai/anvil@latest" {
-		t.Fatalf("wrong npm launch: %+v", command)
+	for _, id := range []string{"anvil", "muse-acp"} {
+		command, err := (Client{}).Resolve(context.Background(), builtin(t, id), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if command.Command != "npx" || strings.Join(command.Args, " ") != "--yes @brokkai/"+id+"@latest" {
+			t.Fatalf("wrong npm launch: %+v", command)
+		}
 	}
 }
 
@@ -66,10 +67,6 @@ func releaseMetadata(tag, name, url, digest string) []byte {
 
 func TestBuiltinReleasePlatformLayouts(t *testing.T) {
 	for _, test := range []struct{ id, platform, archive, command string }{
-		{"muse-acp", "linux-x86_64", "muse-acp-v1.2.3-x86_64-unknown-linux-gnu.tar.gz", "muse-acp"},
-		{"muse-acp", "linux-aarch64", "muse-acp-v1.2.3-aarch64-unknown-linux-gnu.tar.gz", "muse-acp"},
-		{"muse-acp", "darwin-x86_64", "muse-acp-v1.2.3-x86_64-apple-darwin.tar.gz", "muse-acp"},
-		{"muse-acp", "darwin-aarch64", "muse-acp-v1.2.3-aarch64-apple-darwin.tar.gz", "muse-acp"},
 		{"draupnir", "linux-x86_64", "brokk-draupnir-v1.2.3-x86_64-unknown-linux-gnu.zip", "draupnir"},
 		{"draupnir", "linux-aarch64", "brokk-draupnir-v1.2.3-aarch64-unknown-linux-gnu.zip", "draupnir"},
 		{"draupnir", "darwin-x86_64", "brokk-draupnir-v1.2.3-universal-apple-darwin.zip", "draupnir"},
@@ -85,7 +82,7 @@ func TestBuiltinReleasePlatformLayouts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			directory := strings.TrimSuffix(strings.TrimSuffix(test.archive, ".tar.gz"), ".zip")
+			directory := strings.TrimSuffix(test.archive, ".zip")
 			if b.Archive != url || b.Command != directory+"/"+test.command || len(b.SHA256) != 64 {
 				t.Fatalf("wrong release layout: %+v", b)
 			}
@@ -114,80 +111,71 @@ func (r releaseTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 func TestBuiltinDownloadCacheAndOffline(t *testing.T) {
-	for _, id := range []string{"muse-acp", "draupnir"} {
-		t.Run(id, func(t *testing.T) {
-			a := builtin(t, id)
-			target := map[string]string{"linux-x86_64": "x86_64-unknown-linux-gnu", "linux-aarch64": "aarch64-unknown-linux-gnu", "darwin-x86_64": "x86_64-apple-darwin", "darwin-aarch64": "aarch64-apple-darwin"}[Platform()]
-			if target == "" {
-				t.Skip("native release platform")
-			}
-			if id == "draupnir" && strings.HasPrefix(Platform(), "darwin-") {
-				target = "universal-apple-darwin"
-			}
-			directory := a.release.prefix + "-v1.2.3-" + target
-			name := directory + a.release.extension
-			var archive []byte
-			if id == "muse-acp" {
-				f := tarFile(t, directory+"/muse-acp", '0')
-				archive, _ = io.ReadAll(f)
-			} else {
-				var buf bytes.Buffer
-				z := zip.NewWriter(&buf)
-				w, err := z.Create(directory + "/draupnir")
-				if err != nil {
-					t.Fatal(err)
-				}
-				_, _ = io.WriteString(w, "agent")
-				if err := z.Close(); err != nil {
-					t.Fatal(err)
-				}
-				archive = buf.Bytes()
-			}
-			hash := sha256.Sum256(archive)
-			var server *httptest.Server
-			server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/repos/" + a.release.repository + "/releases/latest":
-					_, _ = w.Write(releaseMetadata("v1.2.3", name, server.URL+"/"+name, hex.EncodeToString(hash[:])))
-				case "/" + name:
-					_, _ = w.Write(archive)
-				default:
-					http.NotFound(w, r)
-				}
-			}))
-			defer server.Close()
-			httpClient := server.Client()
-			httpClient.Transport = releaseTransport{httpClient.Transport, strings.TrimPrefix(server.URL, "https://")}
-			c := Client{Cache: t.TempDir(), HTTP: httpClient}
-			if _, err := c.Resolve(context.Background(), a, true); err == nil {
-				t.Fatal("offline launch without cached metadata succeeded")
-			}
-			command, err := c.Resolve(context.Background(), a, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if data, err := os.ReadFile(command.Command); err != nil || string(data) != "agent" {
-				t.Fatalf("wrong executable: %q %v", data, err)
-			}
-			server.Close()
-			for _, offline := range []bool{true, false} {
-				cached, err := c.Resolve(context.Background(), a, offline)
-				if err != nil || cached.Command != command.Command {
-					t.Fatalf("cache reuse (offline=%v): %+v %v", offline, cached, err)
-				}
-			}
-			if err := os.Remove(command.Command); err != nil {
-				t.Fatal(err)
-			}
-			if _, err := c.Resolve(context.Background(), a, true); err == nil || !strings.Contains(err.Error(), "not installed") {
-				t.Fatalf("offline launch attempted an uncached download: %v", err)
-			}
-		})
+	const id = "draupnir"
+	a := builtin(t, id)
+	target := map[string]string{"linux-x86_64": "x86_64-unknown-linux-gnu", "linux-aarch64": "aarch64-unknown-linux-gnu", "darwin-x86_64": "x86_64-apple-darwin", "darwin-aarch64": "aarch64-apple-darwin"}[Platform()]
+	if target == "" {
+		t.Skip("native release platform")
+	}
+	if id == "draupnir" && strings.HasPrefix(Platform(), "darwin-") {
+		target = "universal-apple-darwin"
+	}
+	directory := a.release.prefix + "-v1.2.3-" + target
+	name := directory + a.release.extension
+	var buf bytes.Buffer
+	z := zip.NewWriter(&buf)
+	w, err := z.Create(directory + "/draupnir")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.WriteString(w, "agent")
+	if err := z.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archive := buf.Bytes()
+	hash := sha256.Sum256(archive)
+	var server *httptest.Server
+	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/" + a.release.repository + "/releases/latest":
+			_, _ = w.Write(releaseMetadata("v1.2.3", name, server.URL+"/"+name, hex.EncodeToString(hash[:])))
+		case "/" + name:
+			_, _ = w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	httpClient := server.Client()
+	httpClient.Transport = releaseTransport{httpClient.Transport, strings.TrimPrefix(server.URL, "https://")}
+	c := Client{Cache: t.TempDir(), HTTP: httpClient}
+	if _, err := c.Resolve(context.Background(), a, true); err == nil {
+		t.Fatal("offline launch without cached metadata succeeded")
+	}
+	command, err := c.Resolve(context.Background(), a, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(command.Command); err != nil || string(data) != "agent" {
+		t.Fatalf("wrong executable: %q %v", data, err)
+	}
+	server.Close()
+	for _, offline := range []bool{true, false} {
+		cached, err := c.Resolve(context.Background(), a, offline)
+		if err != nil || cached.Command != command.Command {
+			t.Fatalf("cache reuse (offline=%v): %+v %v", offline, cached, err)
+		}
+	}
+	if err := os.Remove(command.Command); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Resolve(context.Background(), a, true); err == nil || !strings.Contains(err.Error(), "not installed") {
+		t.Fatalf("offline launch attempted an uncached download: %v", err)
 	}
 }
 
 func TestBuiltinRejectsUnsupportedPlatformAndUnsafeTag(t *testing.T) {
-	source := builtin(t, "muse-acp").release
+	source := builtin(t, "draupnir").release
 	for _, tag := range []string{"", "../escape", "v1/child", `v1\child`} {
 		if _, err := source.binary(githubRelease{Tag: tag}, "linux-x86_64"); err == nil {
 			t.Fatalf("accepted tag %q", tag)
@@ -196,7 +184,7 @@ func TestBuiltinRejectsUnsupportedPlatformAndUnsafeTag(t *testing.T) {
 	if _, err := source.binary(githubRelease{Tag: "v1"}, "unknown-cpu"); err == nil {
 		t.Fatal("accepted unsupported platform")
 	}
-	if _, err := source.binary(githubRelease{Tag: "v1"}, "linux-x86_64"); err == nil || !strings.Contains(fmt.Sprint(err), "no asset") {
+	if _, err := source.binary(githubRelease{Tag: "v1"}, "linux-x86_64"); err == nil || !strings.Contains(err.Error(), "no asset") {
 		t.Fatalf("missing asset: %v", err)
 	}
 }
