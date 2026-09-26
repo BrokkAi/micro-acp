@@ -37,7 +37,7 @@ func (m *model) cropLines(s string, height int, tail bool) string {
 		return strings.Join(lines, "\n")
 	}
 	if tail {
-		return m.theme.muted.Render("  … Ctrl+O for full output") + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
+		return m.theme.muted.Render(line("  … Ctrl+O for full output", max(10, m.width-4))) + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
 	}
 	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.muted.Render("… /logs for details")
 }
@@ -226,15 +226,29 @@ func (m *model) View() tea.View {
 		panel = m.completionView(panelHeight)
 	}
 	var parts []string
-	// The only managed transcript is the currently streaming tail. Completed
-	// output is printed above the UI, preserving native scrollback and selection.
+	// The streaming tail and current plan stay in the managed area. Completed
+	// conversation output is printed above it for native scrollback and selection.
 	overhead := baseHeight
 	if panel != "" {
 		overhead += lipgloss.Height(panel)
 	}
+	var plan string
+	if !modal {
+		available := m.height - overhead
+		if m.live != "" {
+			available -= 3 // Leave room to follow the streaming response.
+		}
+		plan = m.planView(w, min(8, available))
+		if plan != "" {
+			overhead += lipgloss.Height(plan)
+		}
+	}
 	if m.live != "" && !modal && m.height > overhead {
 		available := m.height - overhead
 		parts = append(parts, m.cropLines(m.live, available, true))
+	}
+	if plan != "" {
+		parts = append(parts, plan)
 	}
 	parts = append(parts, statusParts...)
 	if panel != "" {
