@@ -245,6 +245,12 @@ func TestCancelWhileWaitingForPermission(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("prompt did not cancel")
 	}
+	_, err := c.Prompt("next turn after permission cancellation")
+	require(t, err)
+	s, _ := c.Snapshot()
+	if !strings.Contains(s.Messages[len(s.Messages)-1].Text, "next turn after permission cancellation") {
+		t.Fatal("connection did not survive permission cancellation")
+	}
 }
 
 func TestNativeForkReplayReplacesInheritedHistory(t *testing.T) {

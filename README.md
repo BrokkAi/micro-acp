@@ -195,7 +195,7 @@ Default paths follow the XDG variables:
 
 Set `MICRO_ACP_HOME` to keep config, data, and cache under one directory. Session files are written atomically with private permissions. Saving happens before and after each prompt and on orderly shutdown; a hard crash can lose the currently streaming response. Concurrent instances should use different sessions, since writes to the same saved session use last-writer-wins semantics.
 
-The client targets stable **ACP v1** using `BrokkAi/acp-go v0.10.0`. Native forks additionally use the SDK's opt-in unstable v1 schema. Draft ACP v2 and editor-specific experimental extensions are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
+The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). Native forks additionally use the SDK's opt-in unstable v1 schema. Draft ACP v2 and editor-specific experimental extensions are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
 
 ## Development
 
