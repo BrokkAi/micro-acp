@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -49,12 +50,16 @@ func TestBuiltinNpmPackages(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir)
+	c := Client{Cache: t.TempDir(), HTTP: &http.Client{Transport: metadataTransport(func(r *http.Request) (*http.Response, error) {
+		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/latest")
+		return metadataResponse(`{"name":"` + name + `","version":"1.2.3"}`), nil
+	})}}
 	for _, id := range []string{"anvil", "muse-acp"} {
-		command, err := (Client{}).Resolve(context.Background(), builtin(t, id), false)
+		command, err := c.Resolve(context.Background(), builtin(t, id), false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if command.Command != "npx" || strings.Join(command.Args, " ") != "--yes @brokkai/"+id+"@latest" {
+		if command.Command != "npx" || strings.Join(command.Args, " ") != "--yes @brokkai/"+id+"@1.2.3" {
 			t.Fatalf("wrong npm launch: %+v", command)
 		}
 	}
@@ -135,11 +140,14 @@ func TestBuiltinDownloadCacheAndOffline(t *testing.T) {
 	archive := buf.Bytes()
 	hash := sha256.Sum256(archive)
 	var server *httptest.Server
+	var metadataRequests, archiveRequests atomic.Int32
 	server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/repos/" + a.release.repository + "/releases/latest":
+			metadataRequests.Add(1)
 			_, _ = w.Write(releaseMetadata("v1.2.3", name, server.URL+"/"+name, hex.EncodeToString(hash[:])))
 		case "/" + name:
+			archiveRequests.Add(1)
 			_, _ = w.Write(archive)
 		default:
 			http.NotFound(w, r)
@@ -152,12 +160,19 @@ func TestBuiltinDownloadCacheAndOffline(t *testing.T) {
 	if _, err := c.Resolve(context.Background(), a, true); err == nil {
 		t.Fatal("offline launch without cached metadata succeeded")
 	}
-	command, err := c.Resolve(context.Background(), a, false)
+	pinned := c.ResolveVersions(context.Background(), []Agent{a}, false)[0]
+	if pinned.Version != "v1.2.3" || pinned.VersionError != "" || archiveRequests.Load() != 0 {
+		t.Fatalf("catalog should resolve the version without installing: %+v", pinned)
+	}
+	command, err := c.Resolve(context.Background(), pinned, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if data, err := os.ReadFile(command.Command); err != nil || string(data) != "agent" {
 		t.Fatalf("wrong executable: %q %v", data, err)
+	}
+	if metadataRequests.Load() != 1 || archiveRequests.Load() != 1 {
+		t.Fatal("launch looked up latest again instead of using the displayed release")
 	}
 	server.Close()
 	for _, offline := range []bool{true, false} {

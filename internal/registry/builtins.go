@@ -6,16 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
-
-	"github.com/BrokkAi/micro-acp/internal/buildinfo"
-	"github.com/BrokkAi/micro-acp/internal/config"
 )
 
 type releaseSource struct {
@@ -23,7 +16,7 @@ type releaseSource struct {
 	universalMac                              bool
 }
 
-// WithBuiltins supplements the live registry without pinning agent versions.
+// WithBuiltins supplements the registry with sources for resolving current versions.
 // Published registry entries take precedence if these IDs are registered later.
 func WithBuiltins(agents []Agent) []Agent {
 	anvil := Agent{ID: "anvil", Name: "Anvil", Version: "latest", Description: "BrokkAi/anvil · portable ACP agent · npm"}
@@ -89,67 +82,21 @@ func (s releaseSource) binary(release githubRelease, platform string) (Binary, e
 	return Binary{}, fmt.Errorf("%s release %s has no asset for %s", s.repository, release.Tag, platform)
 }
 
-func (c Client) releaseBinary(ctx context.Context, source releaseSource, offline bool) (Binary, error) {
-	cachePath := filepath.Join(c.Cache, "releases", strings.ReplaceAll(source.repository, "/", "-")+".json")
-	var cached githubRelease
-	data, cacheErr := os.ReadFile(cachePath)
-	if cacheErr == nil {
-		cacheErr = json.Unmarshal(data, &cached)
-	}
-	cachedBinary, validationErr := source.binary(cached, Platform())
-	if cacheErr == nil {
-		cacheErr = validationErr
-	}
-	if offline {
-		if cacheErr != nil {
-			return Binary{}, fmt.Errorf("%s has no cached release; connect once without --offline", source.repository)
+func (c Client) loadRelease(ctx context.Context, source releaseSource, offline bool) (githubRelease, error) {
+	cache := filepath.Join(c.Cache, "releases", strings.ReplaceAll(source.repository, "/", "-")+".json")
+	validate := func(data []byte) error {
+		var release githubRelease
+		if err := json.Unmarshal(data, &release); err != nil {
+			return err
 		}
-		return cachedBinary, nil
+		_, err := source.binary(release, Platform())
+		return err
 	}
-	data, err := c.fetchRelease(ctx, source.repository)
+	data, err := c.loadMetadata(ctx, "https://api.github.com/repos/"+source.repository+"/releases/latest", cache, offline, validate)
 	if err != nil {
-		if cacheErr == nil {
-			return cachedBinary, nil
-		}
-		return Binary{}, fmt.Errorf("resolve %s release: %w", source.repository, err)
+		return githubRelease{}, fmt.Errorf("resolve %s release: %w", source.repository, err)
 	}
-	var latest githubRelease
-	if err := json.Unmarshal(data, &latest); err != nil {
-		return Binary{}, fmt.Errorf("decode %s release: %w", source.repository, err)
-	}
-	binary, err := source.binary(latest, Platform())
-	if err != nil {
-		return Binary{}, err
-	}
-	if err := config.AtomicWrite(cachePath, data); err != nil {
-		return Binary{}, err
-	}
-	return binary, nil
-}
-
-func (c Client) fetchRelease(ctx context.Context, repository string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/repos/"+repository+"/releases/latest", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "micro-acp/"+buildinfo.Version)
-	res, err := c.httpClient().Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("GitHub HTTP %s", res.Status)
-	}
-	data, err := io.ReadAll(io.LimitReader(res.Body, (2<<20)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 2<<20 {
-		return nil, errors.New("release metadata exceeds 2 MiB")
-	}
-	return data, nil
+	var release githubRelease
+	_ = json.Unmarshal(data, &release) // Validated before caching or returning.
+	return release, nil
 }

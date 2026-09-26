@@ -36,6 +36,7 @@ type Agent struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
 	Version      string `json:"version"`
+	VersionError string `json:"-"`
 	Description  string `json:"description"`
 	Distribution struct {
 		NPX    *Package          `json:"npx,omitempty"`
@@ -171,6 +172,13 @@ func (a Agent) Kind() string {
 	return "binary"
 }
 func (c Client) Resolve(ctx context.Context, a Agent, offline bool) (config.Command, error) {
+	if a.NeedsVersionResolution() {
+		var err error
+		a, err = c.resolveVersion(ctx, a, offline)
+		if err != nil {
+			return config.Command{}, err
+		}
+	}
 	if p := a.Distribution.NPX; p != nil {
 		if _, err := exec.LookPath("npx"); err == nil {
 			if p.Package == "" {
@@ -188,13 +196,6 @@ func (c Client) Resolve(ctx context.Context, a Agent, offline bool) (config.Comm
 		}
 	}
 	if b, ok := a.Distribution.Binary[Platform()]; ok {
-		return c.install(ctx, a, b, offline)
-	}
-	if a.release != nil {
-		b, err := c.releaseBinary(ctx, *a.release, offline)
-		if err != nil {
-			return config.Command{}, err
-		}
 		return c.install(ctx, a, b, offline)
 	}
 	return config.Command{}, fmt.Errorf("%s cannot run on %s: install %s or configure a custom agent", a.Name, Platform(), a.Kind())

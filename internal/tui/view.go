@@ -63,16 +63,18 @@ func (m *model) suggestionRows(entries []item, index, width, limit int, commands
 			prefix = "› "
 			style = m.theme.selection
 		}
-		if description == "" {
-			label = line(label, width-2)
-		} else {
-			label = line(label, labelWidth)
+		labelLimit := width - 2
+		if description != "" && width > 42 {
+			labelLimit = labelWidth
 		}
+		if e.version != "" {
+			version := " (" + clean(e.version) + ")"
+			label = line(label, labelLimit-ansi.StringWidth(version)) + version
+		}
+		label = line(label, labelLimit)
 		row := style.Render(prefix + label)
 		if description != "" && width > 42 {
 			row += strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(label)+2)) + m.theme.muted.Render(line(description, max(1, width-labelWidth-4)))
-		} else if width <= 42 {
-			row = style.Render(prefix + line(label, width-2))
 		}
 		rows = append(rows, row)
 	}

@@ -30,6 +30,7 @@ type Options struct {
 }
 type item struct {
 	title, description, id string
+	version                string
 	value                  any
 	arguments              bool
 }
@@ -169,6 +170,10 @@ func (m *model) Init() tea.Cmd {
 	if m.options.Agent != "" {
 		for _, entry := range m.agents {
 			if entry.id == m.options.Agent {
+				if _, custom := entry.value.(config.Command); !custom {
+					m.status = "Resolving agent versions…"
+					break // Wait for registry precedence and exact versions.
+				}
 				m.started = true
 				cmds = append(cmds, m.connect(entry))
 				break
@@ -185,7 +190,18 @@ func pulse() tea.Cmd {
 }
 func (m *model) fetchCatalog() tea.Cmd {
 	r, offline, ctx := m.registry, m.options.Offline, m.ctx
-	return func() tea.Msg { s, e := r.Load(ctx, offline); return catalogMsg{s, e} }
+	custom := m.options.Config.Agents
+	return func() tea.Msg {
+		s, e := r.Load(ctx, offline)
+		var agents []registry.Agent
+		for _, a := range registry.WithBuiltins(s.Index.Agents) {
+			if _, overridden := custom[a.ID]; !overridden {
+				agents = append(agents, a)
+			}
+		}
+		s.Index.Agents = r.ResolveVersions(ctx, agents, offline)
+		return catalogMsg{s, e}
+	}
 }
 func (m *model) rebuildAgents() {
 	m.agents = nil
@@ -203,7 +219,14 @@ func (m *model) rebuildAgents() {
 	}
 	for _, a := range registry.WithBuiltins(m.catalog.Index.Agents) {
 		if _, custom := m.options.Config.Agents[a.ID]; !custom {
-			m.agents = append(m.agents, item{title: a.Name, description: a.Description, id: a.ID, value: a})
+			version, description := a.Version, a.Description
+			if a.NeedsVersionResolution() {
+				version = "resolving…"
+			}
+			if a.VersionError != "" {
+				version, description = "unavailable", a.VersionError+" · /refresh to retry"
+			}
+			m.agents = append(m.agents, item{title: a.Name, description: description, id: a.ID, version: version, value: a})
 		}
 	}
 }
@@ -219,10 +242,23 @@ func (m *model) waitPermission() tea.Cmd {
 	}
 }
 func (m *model) connect(selected item) tea.Cmd {
+	if a, ok := selected.value.(registry.Agent); ok && a.NeedsVersionResolution() {
+		if m.catalogLoading && a.VersionError == "" {
+			m.status, m.lastError = "Resolving agent versions…", ""
+		} else if a.VersionError != "" {
+			m.lastError = a.Name + ": " + a.VersionError + " · /refresh to retry"
+		} else {
+			m.lastError = a.Name + " version has not been resolved; /refresh to look it up."
+		}
+		return nil
+	}
 	m.busy = true
 	m.startedAt = time.Now()
 	m.lastError = ""
 	m.status = "Starting " + selected.title
+	if selected.version != "" {
+		m.status += " (" + selected.version + ")"
+	}
 	m.page = "chat"
 	m.picker = nil
 	m.completion = nil
@@ -302,7 +338,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		m.printing = false
 	case catalogMsg:
 		m.catalogLoading = false
-		if m.status == "Refreshing registry…" {
+		if m.status == "Refreshing registry…" || m.status == "Resolving agent versions…" {
 			m.status = "Ready"
 		}
 		m.catalog = msg.snapshot
@@ -320,7 +356,11 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			m.started = true
 			for _, entry := range m.agents {
 				if entry.id == m.options.Agent {
-					return m, m.connect(entry)
+					cmd := m.connect(entry)
+					if cmd == nil {
+						m.openPicker("agents", m.agents)
+					}
+					return m, cmd
 				}
 			}
 			m.lastError = "Unknown agent: " + m.options.Agent

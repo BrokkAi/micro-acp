@@ -51,6 +51,9 @@ func TestAgentsListsBuiltinsOfflineAndHonorsCustomOverrides(t *testing.T) {
 	if !strings.Contains(out.String(), "/custom/anvil") || warnings.Len() == 0 {
 		t.Fatalf("missing custom override or unavailable-registry warning: %s / %s", out.String(), warnings.String())
 	}
+	if strings.Contains(out.String(), "latest") || !strings.Contains(out.String(), "unavailable") || strings.Contains(warnings.String(), "resolve @brokkai/anvil") {
+		t.Fatalf("unresolved versions or custom overrides were mishandled: %s / %s", out.String(), warnings.String())
+	}
 }
 func TestCLIRejectsAmbiguousLaunchAndTraversal(t *testing.T) {
 	t.Setenv("MICRO_ACP_HOME", t.TempDir())

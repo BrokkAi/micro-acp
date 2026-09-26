@@ -121,10 +121,19 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 			for _, name := range names {
 				fmt.Fprintf(w, "%s\t%s\tcustom\t%s\n", name, name, cfg.Agents[name].Command)
 			}
+			var agents []registry.Agent
 			for _, a := range registry.WithBuiltins(snapshot.Index.Agents) {
 				if _, ok := cfg.Agents[a.ID]; !ok {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Name, a.Version, a.Kind())
+					agents = append(agents, a)
 				}
+			}
+			for _, a := range r.ResolveVersions(ctx, agents, *offline) {
+				version := a.Version
+				if a.VersionError != "" {
+					version = "unavailable"
+					fmt.Fprintf(errOut, "%s: %s\n", a.Name, a.VersionError)
+				}
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Name, version, a.Kind())
 			}
 			return w.Flush()
 		case "sessions":

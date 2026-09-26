@@ -65,6 +65,13 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 		}
 		selected := p.matches[p.index]
 		kind := p.kind
+		if kind == "agents" {
+			if m.busy {
+				m.lastError = "Stop the current turn with Esc first"
+				return nil
+			}
+			return m.connect(selected)
+		}
 		m.picker = nil
 		switch kind {
 		case "commands":
@@ -74,12 +81,6 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 				return nil
 			}
 			return m.command(selected.id)
-		case "agents":
-			if m.busy {
-				m.lastError = "Stop the current turn with Esc first"
-				return nil
-			}
-			return m.connect(selected)
 		case "auth":
 			return m.authenticate(selected.id)
 		case "sessions":
