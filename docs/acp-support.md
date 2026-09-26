@@ -15,7 +15,7 @@ Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to c
 | `session/list` | Combines saved sessions with paginated remote results, filters by workspace, deduplicates. | Lifecycle tests. |
 | `session/close` | `/close`; saves local history, closes remote session, releases terminals. | Authentication/lifecycle fixture. |
 | `session/delete` | `/delete` or session picker; explicit confirmation, remote deletion followed by local removal. `/forget` is local only. | Lifecycle tests. |
-| `session/prompt` | Multiline composer, streamed response, rich content, agent slash commands. | Lifecycle, configuration and rich content tests. |
+| `session/prompt` | Multiline composer, streamed response, rich content, agent slash commands. Token/request limits and refusals show their stop reason and pause queued prompts. | Lifecycle, configuration, rich content and stop-reason tests. |
 | `session/cancel` | Esc/Ctrl+C stops a turn, cancels pending interactions, waits for completion; disconnects unresponsive processes. | Permission/cancellation tests. |
 | `session/set_mode` | `/mode` for agents offering legacy session modes. | `TestAgentDrivenConfigurationAndRichUpdates`. |
 | `session/set_config_option` | `/config` (`/settings` alias), option/value completion, plus `/model`, `/mode`, `/effort`; grouped choices, booleans, arbitrary categories, and dependent option refresh. | `TestAgentDrivenConfigurationAndRichUpdates`. |
