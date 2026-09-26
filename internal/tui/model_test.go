@@ -97,3 +97,24 @@ func TestCommandsDoNotLaunchWithoutAgent(t *testing.T) {
 		t.Fatal("command palette missing")
 	}
 }
+
+func TestAgentPickerIncludesBuiltinsAndCustomOverrides(t *testing.T) {
+	m := newModel(context.Background(), Options{Config: config.Config{Agents: map[string]config.Command{"anvil": {Command: "/custom/anvil"}}}})
+	for _, id := range []string{"anvil", "muse-acp", "draupnir"} {
+		count := 0
+		for _, entry := range m.agents {
+			if entry.id == id {
+				count++
+				if id == "anvil" {
+					command, ok := entry.value.(config.Command)
+					if !ok || command.Command != "/custom/anvil" {
+						t.Fatal("built-in replaced the custom Anvil command")
+					}
+				}
+			}
+		}
+		if count != 1 {
+			t.Fatalf("expected one %s entry, got %d", id, count)
+		}
+	}
+}

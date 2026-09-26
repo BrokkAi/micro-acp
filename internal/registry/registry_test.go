@@ -121,21 +121,21 @@ func TestBinaryInstallChecksumAndReuse(t *testing.T) {
 	defer s.Close()
 	c := Client{Cache: t.TempDir(), HTTP: s.Client()}
 	binary := Binary{Archive: s.URL + "/agent.tar.gz", Command: "./nested/agent", SHA256: hex.EncodeToString(hash[:])}
-	launch, err := c.install(context.Background(), Agent{Name: "test"}, binary)
+	launch, err := c.install(context.Background(), Agent{Name: "test"}, binary, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if body, err := os.ReadFile(launch.Command); err != nil || string(body) != "agent" {
 		t.Fatalf("executable: %q %v", body, err)
 	}
-	if _, err = c.install(context.Background(), Agent{Name: "test"}, binary); err != nil {
+	if _, err = c.install(context.Background(), Agent{Name: "test"}, binary, false); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != 1 {
 		t.Fatal("valid install downloaded twice")
 	}
 	binary.SHA256 = "incorrect"
-	if _, err := c.install(context.Background(), Agent{Name: "test"}, binary); err == nil {
+	if _, err := c.install(context.Background(), Agent{Name: "test"}, binary, false); err == nil {
 		t.Fatal("checksum mismatch accepted")
 	}
 }

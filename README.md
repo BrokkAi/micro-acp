@@ -31,6 +31,16 @@ Connect to a real agent:
 
 Agents use their own accounts and authentication. Existing environment variables and credentials are inherited. `/auth` opens the offered login methods; `/auth <method-id>` selects one directly. Agent-managed login displays stderr output and handles input requests. Terminal login temporarily suspends the TUI, runs the agent's advertised login flow, then reconnects and reinitializes the agent. Authentication-required errors open the login picker automatically.
 
+The agent picker and `micro-acp agents` also include these built-in entries:
+
+| Agent ID | Server | Launch |
+| --- | --- | --- |
+| `anvil` | [BrokkAi/anvil](https://github.com/BrokkAi/anvil) | `npx --yes @brokkai/anvil@latest`; requires Node.js/npm. |
+| `muse-acp` | [BrokkAi/muse-acp](https://github.com/BrokkAi/muse-acp) | Downloads the latest native release; requires Muse Code installed and authenticated. |
+| `draupnir` | [foundev/draupnir](https://github.com/foundev/draupnir) | Downloads the latest native release. |
+
+For example, run `micro-acp --agent anvil`, `micro-acp --agent muse-acp`, or `micro-acp --agent draupnir`. Native releases support Linux (glibc) and macOS on amd64 and arm64; Draupnir uses its universal macOS archive. Downloads are verified against GitHub's SHA-256 asset digest and installed in the private cache. GitHub release metadata is checked when connecting, with cached metadata used if that request fails. `--offline` requires a previously cached native release and executable. Built-in entries remain visible when the official registry is unavailable. Matching published registry entries take precedence over built-ins, and custom agent configurations take precedence over both.
+
 ## Custom agents
 
 Pass a stdio ACP executable and its arguments after `--`:
@@ -173,7 +183,7 @@ Supported distributions:
 - `uvx`: requires `uv`; launches the registry's package spec.
 - Native binaries: downloads for the current OS/architecture, verifies SHA-256 when supplied, and installs into a private cache. ZIP, tar.gz, tar.bz2, and raw executable distributions are supported. Archives containing symlinks, special files, or unsafe paths are rejected.
 
-When a refresh fails, a valid cached registry is used with a warning. With no cache, custom agents remain available in the TUI. `--offline` deliberately uses the cache; it does not guarantee that an agent's package manager or the agent itself can run without network access. The demo does not fetch the registry.
+When a refresh fails, a valid cached registry is used with a warning. With no cache, built-in and custom agents remain available in the TUI and CLI list. `--offline` deliberately uses the cache and prevents native binary downloads; it does not guarantee that an agent's package manager or the agent itself can run without network access. The demo does not fetch the registry.
 
 Default paths follow the XDG variables:
 

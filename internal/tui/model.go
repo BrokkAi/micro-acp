@@ -201,7 +201,7 @@ func (m *model) rebuildAgents() {
 		cmd := m.options.Config.Agents[name]
 		m.agents = append(m.agents, item{title: name, description: cmd.Command, id: name, value: cmd})
 	}
-	for _, a := range m.catalog.Index.Agents {
+	for _, a := range registry.WithBuiltins(m.catalog.Index.Agents) {
 		if _, custom := m.options.Config.Agents[a.ID]; !custom {
 			m.agents = append(m.agents, item{title: a.Name, description: a.Description, id: a.ID, value: a})
 		}
@@ -227,6 +227,7 @@ func (m *model) connect(selected item) tea.Cmd {
 	m.picker = nil
 	m.completion = nil
 	ctx, cwd, r, st, settings, interactions := m.ctx, m.options.Cwd, m.registry, m.store, m.options.Config.Session, m.interactions
+	offline := m.options.Offline
 	old := m.client
 	m.client = nil
 	m.live = ""
@@ -247,7 +248,7 @@ func (m *model) connect(selected item) tea.Cmd {
 			command = v
 		case registry.Agent:
 			var err error
-			command, err = r.Resolve(ctx, v)
+			command, err = r.Resolve(ctx, v, offline)
 			if err != nil {
 				return connectedMsg{err: err}
 			}
@@ -309,7 +310,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		if msg.err != nil {
 			m.catalog.Warning = msg.err.Error()
 			if m.client == nil && !m.busy {
-				m.lastError = "Registry unavailable. Use a configured agent, /refresh, or -- /path/to/agent."
+				m.lastError = "Registry unavailable. Built-in and configured agents are still available; /refresh retries."
 			}
 		}
 		if m.catalog.Warning != "" {
