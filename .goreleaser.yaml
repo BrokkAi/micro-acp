@@ -25,6 +25,8 @@ archives:
       - LICENSE
       - README.md
       - docs/acp-support.md
+      - docs/screenshots/README.md
+      - docs/screenshots/*.png
 
 checksum:
   name_template: checksums.txt

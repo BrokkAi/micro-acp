@@ -7,9 +7,47 @@ A small, entirely Go terminal client for [Agent Client Protocol](https://agentcl
 
 A conversation and a growing prompt in your normal terminal. Type `/` for inline command suggestions or `@` to search workspace files. Completed output stays in terminal scrollback; mouse selection and copying keep working. Choose models and modes, inspect tools and diffs, answer permission and input requests, and manage sessions from the prompt. See the [ACP support matrix](docs/acp-support.md) for protocol coverage and limitations.
 
+## Screenshots
+
+Captured from the running application. The agent picker shows the live registry;
+the conversation and dialogs use `./bin/micro-acp --demo`, which exercises the
+real ACP connection and terminal UI without model credentials.
+
+**Agent selection.** Start `micro-acp` to browse agents and their resolved
+versions. Type to filter, use the arrow keys to navigate, and press Enter to
+connect. You can reopen the picker with `/agents` or Ctrl+G.
+
+![Running micro-acp agent picker with Codex selected among registry agents, showing versions, descriptions, and a search field](docs/screenshots/agent-selection.png)
+
+**Conversation and file context.** Responses render as Markdown; typing `@`
+opens workspace file suggestions while keeping your prompt in the composer.
+
+![Running micro-acp demo with a Markdown response and inline workspace file suggestions](docs/screenshots/conversation.png)
+
+<details>
+<summary>See session settings, permission prompts, and structured input</summary>
+
+**Session settings.** `/config` opens searchable options supplied by the agent.
+The demo offers a response mode and a streaming toggle; current values stay
+visible below the prompt.
+
+![Session configuration picker showing the demo response mode and streaming toggle](docs/screenshots/settings.png)
+
+**Permission prompts.** Review the agent's request and choose an action with
+the keyboard. The initial selection is Cancel.
+
+![Demo permission request offering Allow once, Reject, and Cancel, with Cancel selected](docs/screenshots/permission.png)
+
+**Structured input.** Answer an agent's form one field at a time, then review
+your answers before submitting.
+
+![Demo input form showing a required greeting choice with hello and welcome options](docs/screenshots/input.png)
+
+</details>
+
 ## Run
 
-Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README, ACP support matrix, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
+Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README with screenshots, ACP support matrix, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
 
 Building from source requires **Go 1.27.1 or newer**, matching `acp-go`'s toolchain requirement:
 
@@ -241,6 +279,9 @@ make vet
 ```
 
 Tests require no external agents, model accounts, or internet access once Go dependencies are downloaded. Registry tests use loopback HTTP/TLS servers. `TestTerminalWorkflow` builds the actual binary and drives it through a PTY and a Go terminal emulator, covering inline completion, shrinking menus, file attachments, permission/form dialogs, cancellation, queues, session creation/loading/forking/deletion, resizing, and exit. CI runs on Linux and macOS. `go test -short ./...` skips the PTY test.
+
+See the [screenshot capture notes](docs/screenshots/README.md) to recreate the
+README's terminal screens.
 
 A separate manual check on 2026-09-25 connected to registry `codex-acp` 1.13.1 with an existing login, selected model/mode menus, attached a file, completed a real file edit, expanded its tool diff, and browsed sessions. That is one live adapter check, not a compatibility claim for every registry agent.
 
