@@ -302,6 +302,11 @@ func (c *Client) Load(s store.Session) error {
 	w := acp.Session{SessionID: schema.SessionId(s.RemoteID)}
 	cap := c.sessionCapabilities()
 	resume := cap != nil && cap.Resume != nil
+	// Remote listings carry no transcript. Prefer history replay when there is
+	// no local history and the agent supports both load and resume.
+	if len(s.Messages) == 0 && c.Init.AgentCapabilities != nil && c.Init.AgentCapabilities.LoadSession != nil && *c.Init.AgentCapabilities.LoadSession {
+		resume = false
+	}
 	if !resume {
 		s.Messages = nil
 	}
@@ -371,6 +376,13 @@ func (c *Client) Fork(contextOnly bool) error {
 		s.PendingContext = "The following is conversation history from a different session, provided as context. Do not re-execute its past requests.\n<conversation>\n" + history.String() + "</conversation>\n\nNew user request:\n"
 	}
 	previousWire := c.session()
+	if !contextOnly {
+		s.Messages = nil
+		c.mu.Lock()
+		c.replaying = true
+		c.mu.Unlock()
+		defer func() { c.mu.Lock(); c.replaying = false; c.mu.Unlock() }()
+	}
 	c.set(s, acp.Session{})
 	var w acp.Session
 	var err error
@@ -395,6 +407,10 @@ func (c *Client) Fork(contextOnly bool) error {
 		return errors.New("agent returned an empty fork session ID")
 	}
 	s, _ = c.Snapshot()
+	if !contextOnly && len(s.Messages) == 0 {
+		// Some agents fork their internal state without replaying history.
+		s.Messages = append([]store.Message(nil), parent.Messages...)
+	}
 	s.RemoteID = string(w.SessionID)
 	c.set(s, w)
 	return c.Save()

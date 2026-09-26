@@ -5,24 +5,49 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/BrokkAi/acp-go"
+	"github.com/BrokkAi/acp-go/agent"
+	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/demo"
 	"github.com/BrokkAi/micro-acp/internal/store"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestTUIAgentProcess(t *testing.T) {
 	if path := os.Getenv("MICRO_ACP_TUI_TEST_AGENT"); path != "" {
-		if err := demo.Run(context.Background(), path); err != nil {
+		var err error
+		if os.Getenv("MICRO_ACP_TUI_REPLAY") != "" {
+			err = agent.New(&chunkedReplayAgent{demo.Agent{Store: store.Store{Directory: path}}}).Serve(context.Background(), os.Stdin, os.Stdout)
+		} else {
+			err = demo.Run(context.Background(), path)
+		}
+		if err != nil {
 			os.Exit(1)
 		}
 		os.Exit(0)
 	}
+}
+
+type chunkedReplayAgent struct{ demo.Agent }
+
+func (a *chunkedReplayAgent) LoadSession(ctx context.Context, c agent.Client, r schema.LoadSessionRequest) (schema.LoadSessionResponse, error) {
+	if err := c.Notify(ctx, schema.SessionUpdateMethodName, acp.NewAgentMessageChunkUpdate(r.SessionID, schema.ContentChunk{Content: acp.NewTextContent("Beginning of the saved reply. ")})); err != nil {
+		return schema.LoadSessionResponse{}, err
+	}
+	// A callback lets the test inspect the UI between replay chunks without sleeps.
+	_, err := c.RequestPermission(ctx, schema.RequestPermissionRequest{SessionID: r.SessionID, ToolCall: schema.ToolCallUpdate{ToolCallID: "replay"}, Options: []schema.PermissionOption{{OptionID: "allow", Name: "Allow", Kind: schema.PermissionOptionKindAllowOnce}}})
+	if err != nil {
+		return schema.LoadSessionResponse{}, err
+	}
+	err = c.Notify(ctx, schema.SessionUpdateMethodName, acp.NewAgentMessageChunkUpdate(r.SessionID, schema.ContentChunk{Content: acp.NewTextContent("End of the saved reply.")}))
+	return schema.LoadSessionResponse{}, err
 }
 
 func connectedComposer(t *testing.T) *model {
@@ -126,5 +151,40 @@ func TestQueuePickerTracksAutomaticDequeue(t *testing.T) {
 				t.Fatalf("edited the wrong prompt: %q", m.input.Value())
 			}
 		})
+	}
+}
+
+func TestLoadWaitsForCompleteReplayBeforePrinting(t *testing.T) {
+	t.Setenv("MICRO_ACP_TUI_REPLAY", "yes")
+	m := connectedComposer(t)
+	saved, _ := m.client.Snapshot()
+	if err := m.client.New(); err != nil {
+		t.Fatal(err)
+	}
+	m.syncTranscript()
+	m.printQueue = nil
+	load := m.perform("Loading session", func() error { return m.client.Load(saved) })
+	done := make(chan resultMsg, 1)
+	go func() { done <- load().(resultMsg) }()
+	var permission client.Permission
+	select {
+	case permission = <-m.client.Permissions:
+	case <-time.After(5 * time.Second):
+		t.Fatal("replay did not reach its midpoint")
+	}
+	m.syncTranscript()
+	permission.Reply <- schema.RequestPermissionOutcome{Cancelled: &schema.RequestPermissionOutcomeCancelled{}}
+	select {
+	case result := <-done:
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("replay did not complete")
+	}
+	m.busy = false
+	m.syncTranscript()
+	if output := ansi.Strip(strings.Join(m.printQueue, "\n")); !strings.Contains(output, "End of the saved reply.") {
+		t.Fatalf("replayed message was printed before all its chunks arrived: %s", output)
 	}
 }

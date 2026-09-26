@@ -41,9 +41,22 @@ func TestAgentProcess(t *testing.T) {
 		<-ready
 		switch method {
 		case "initialize":
+			if mode == "native-replay" {
+				return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"fork": map[string]any{}, "resume": map[string]any{}}}}, nil
+			}
 			return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"sessionCapabilities": map[string]any{"fork": map[string]any{}}}}, nil
 		case "session/new":
 			return schema.NewSessionResponse{SessionID: schema.SessionId(fmt.Sprintf("native-%d", seq.Add(1)))}, nil
+		case "session/resume":
+			return schema.ResumeSessionResponse{}, nil
+		case "session/load":
+			var request schema.LoadSessionRequest
+			if err := json.Unmarshal(raw, &request); err != nil {
+				return nil, err
+			}
+			_ = conn.Notify(ctx, "session/update", acp.NewUserMessageChunkUpdate(request.SessionID, schema.ContentChunk{Content: acp.NewTextContent("hello")}))
+			_ = conn.Notify(ctx, "session/update", acp.NewAgentMessageChunkUpdate(request.SessionID, schema.ContentChunk{Content: acp.NewTextContent("native reply")}))
+			return schema.LoadSessionResponse{}, nil
 		case "session/fork":
 			var p struct {
 				SessionID string `json:"sessionId"`
@@ -54,6 +67,10 @@ func TestAgentProcess(t *testing.T) {
 			}
 			if p.SessionID != "native-1" || p.Cwd == "" {
 				return nil, fmt.Errorf("incorrect fork request: %s", raw)
+			}
+			if mode == "native-replay" {
+				_ = conn.Notify(ctx, "session/update", acp.NewUserMessageChunkUpdate("native-fork", schema.ContentChunk{Content: acp.NewTextContent("hello")}))
+				_ = conn.Notify(ctx, "session/update", acp.NewAgentMessageChunkUpdate("native-fork", schema.ContentChunk{Content: acp.NewTextContent("native reply")}))
 			}
 			_ = conn.Notify(ctx, "session/update", map[string]any{"sessionId": "native-fork", "update": map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []any{map[string]any{"name": "branch", "description": "Branch command"}}}})
 			return schema.NewSessionResponse{SessionID: "native-fork"}, nil
@@ -227,5 +244,35 @@ func TestCancelWhileWaitingForPermission(t *testing.T) {
 		require(t, err)
 	case <-time.After(5 * time.Second):
 		t.Fatal("prompt did not cancel")
+	}
+}
+
+func TestNativeForkReplayReplacesInheritedHistory(t *testing.T) {
+	c := openTest(t, "native-replay", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+	require(t, c.New())
+	_, err := c.Prompt("hello")
+	require(t, err)
+	parent, _ := c.Snapshot()
+	require(t, c.Fork(false))
+	fork, _ := c.Snapshot()
+	if len(fork.Messages) != len(parent.Messages) {
+		t.Fatalf("fork duplicated history: %#v", fork.Messages)
+	}
+	for i, msg := range fork.Messages {
+		if msg.Text != parent.Messages[i].Text || msg.Role != parent.Messages[i].Role {
+			t.Fatalf("fork corrupted message %d: got %q want %q", i, msg.Text, parent.Messages[i].Text)
+		}
+	}
+}
+
+func TestRemoteOnlySessionLoadsHistoryWhenResumeIsAlsoAvailable(t *testing.T) {
+	cwd := t.TempDir()
+	c := openTest(t, "native-replay", cwd, t.TempDir(), store.Store{Directory: t.TempDir()})
+	// Session listings provide metadata, but no locally saved conversation.
+	remote := store.NewSession("demo", "remote-existing", cwd)
+	require(t, c.Load(remote))
+	loaded, _ := c.Snapshot()
+	if len(loaded.Messages) != 2 || loaded.Messages[0].Role != "user" || loaded.Messages[1].Text != "native reply" {
+		t.Fatalf("remote session did not restore its history: %+v", loaded.Messages)
 	}
 }
