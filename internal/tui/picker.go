@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"strconv"
 	"strings"
 
 	"charm.land/bubbles/v2/textinput"
@@ -95,7 +96,17 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.lastError = "Send or clear the current draft before editing a queued prompt"
 				return nil
 			}
-			i := selected.value.(int)
+			i := -1
+			for index, q := range m.queued {
+				if q.id == selected.value.(uint64) {
+					i = index
+					break
+				}
+			}
+			if i < 0 {
+				m.lastError = "This prompt has already been sent"
+				return nil
+			}
 			q := m.queued[i]
 			m.queued = append(m.queued[:i], m.queued[i+1:]...)
 			m.input.SetValue(q.text)
@@ -117,4 +128,33 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 	p.input, cmd = p.input.Update(msg)
 	p.filter()
 	return cmd
+}
+
+func (m *model) queueItems() []item {
+	var entries []item
+	for _, q := range m.queued {
+		entries = append(entries, item{title: q.text, description: "Enter to edit this queued prompt", id: strconv.FormatUint(q.id, 10), value: q.id})
+	}
+	return entries
+}
+
+func (m *model) refreshQueuePicker() {
+	p := m.picker
+	if p == nil || p.kind != "queue" {
+		return
+	}
+	selected := ""
+	if p.index < len(p.matches) {
+		selected = p.matches[p.index].id
+	}
+	index := p.index
+	p.entries = m.queueItems()
+	p.filter()
+	p.index = min(index, max(0, len(p.matches)-1))
+	for i, entry := range p.matches {
+		if entry.id == selected {
+			p.index = i
+			break
+		}
+	}
 }

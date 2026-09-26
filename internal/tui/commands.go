@@ -189,11 +189,7 @@ func (m *model) command(text string) tea.Cmd {
 		if arg == "send" && !m.busy && len(m.queued) > 0 {
 			return m.sendQueued()
 		}
-		var entries []item
-		for i, q := range m.queued {
-			entries = append(entries, item{title: q.text, description: "Enter to edit this queued prompt", value: i})
-		}
-		m.openPicker("queue", entries)
+		m.openPicker("queue", m.queueItems())
 		return nil
 	case "/info":
 		m.info = c.Details()
@@ -251,7 +247,8 @@ func (m *model) sendPrompt(text string) tea.Cmd {
 		return nil
 	}
 	s, _ := m.client.Snapshot()
-	q := queuedPrompt{text: text, blocks: blocks, attachments: m.attachments, resources: m.resources, sessionID: s.ID}
+	m.queueSequence++
+	q := queuedPrompt{id: m.queueSequence, text: text, blocks: blocks, attachments: m.attachments, resources: m.resources, sessionID: s.ID}
 	m.input.Reset()
 	m.completion = nil
 	m.attachments = nil

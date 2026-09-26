@@ -56,6 +56,7 @@ type permissionMsg struct{ permission client.Permission }
 type pulseMsg time.Time
 type printedMsg struct{}
 type queuedPrompt struct {
+	id          uint64
 	text        string
 	blocks      []acp.Content
 	attachments []string
@@ -107,6 +108,7 @@ type model struct {
 	interactions               client.Interactions
 	resumeTarget               *store.Session
 	queued                     []queuedPrompt
+	queueSequence              uint64
 	queuePaused                bool
 	printedSession             string
 	printedIndex, streamPrefix int
@@ -267,6 +269,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	updated = m
 	defer func() {
 		m.syncTranscript()
+		m.refreshQueuePicker()
 		if m.client != nil && m.picker != nil {
 			m.refreshSettingPicker(m.client.Selectors())
 		}
