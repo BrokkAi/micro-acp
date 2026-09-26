@@ -11,7 +11,7 @@ Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go v0.10.0`. All
 | `logout` | `/logout`; capability checked by SDK, saves history and clears active session. | `TestElicitationAndAuthenticationRoundTrips`. |
 | `session/new` | `/new`, optional MCP servers and additional directories; handles setup callbacks before response. | Lifecycle, resume, workspace tests. |
 | `session/load` | `/sessions` or `/load`; reconstructs transcript from replay. | `TestSessionLifecycleAcrossProcesses`. |
-| `session/resume` | Preferred when supported; keeps local transcript and refreshes session configuration. | `TestResumeKeepsLocalTranscriptAndRefreshesState`. |
+| `session/resume` | Preferred for saved history; remote-only sessions use load replay when available. Refreshes session configuration. | `TestResumeKeepsLocalTranscriptAndRefreshesState`, `TestRemoteOnlySessionLoadsHistoryWhenResumeIsAlsoAvailable`. |
 | `session/list` | Combines saved sessions with paginated remote results, filters by workspace, deduplicates. | Lifecycle tests. |
 | `session/close` | `/close`; saves local history, closes remote session, releases terminals. | Authentication/lifecycle fixture. |
 | `session/delete` | `/delete` or session picker; explicit confirmation, remote deletion followed by local removal. `/forget` is local only. | Lifecycle tests. |
@@ -38,7 +38,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 
 | Update | Presentation and state |
 | --- | --- |
-| `user_message_chunk` | Restores replayed prompts during load. |
+| `user_message_chunk` | Restores replayed prompts during load and native fork. |
 | `agent_message_chunk` | Streams Markdown, retains message IDs and non-text blocks. |
 | `agent_thought_chunk` | Compact thinking entries; full text in Ctrl+O details. |
 | `tool_call` | Compact title/status and file-change summary; Ctrl+O exposes kind, name, inputs, content, file locations and outputs. |
@@ -56,7 +56,7 @@ Form fields support the restricted flat schema: strings, integers, numbers, bool
 
 ## Extensions and boundaries
 
-- `session/fork`: implemented through the SDK's unstable v1 schema only when advertised; tested by `TestNativeForkUsesAdvertisedCapability`. `/fork --context` is a separately labeled text-context fallback.
+- `session/fork`: implemented through the SDK's unstable v1 schema only when advertised. Replayed history replaces the inherited transcript; agents that do not replay retain the saved history. Tested by `TestNativeForkUsesAdvertisedCapability` and `TestNativeForkReplayReplacesInheritedHistory`. `/fork --context` is a separately labeled text-context fallback.
 - MCP configuration: stdio, HTTP and SSE definitions are forwarded during session operations. The agent connects to and operates those servers. This client is not an MCP server or an MCP-over-ACP proxy.
 - Additional directories: passed only through supported session operations, restored with saved sessions, and included in client callback routing.
 - Unknown notifications are ignored; unsupported requests receive JSON-RPC method-not-found. No editor document synchronization, inline completion, next-edit prediction or experimental provider-management capabilities are advertised.

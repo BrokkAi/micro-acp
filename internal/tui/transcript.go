@@ -146,6 +146,11 @@ func (m *model) syncTranscript() {
 	if m.client == nil {
 		return
 	}
+	// Session operations can replay several chunks into the same message.
+	// Wait for completion before committing that history to scrollback.
+	if m.busy && !m.prompting {
+		return
+	}
 	s, _ := m.client.Snapshot()
 	if s.ID == "" || s.RemoteID == "" {
 		m.live = ""
