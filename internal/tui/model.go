@@ -417,9 +417,23 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			m.retryOperation = nil
 			m.resumeTarget = nil
 		}
-		if msg.reason == schema.StopReasonCancelled {
-			m.status = "Stopped"
-			m.queuePaused = true
+		if msg.prompt && msg.err == nil {
+			switch msg.reason {
+			case "", schema.StopReasonEndTurn:
+			case schema.StopReasonCancelled:
+				m.status = "Stopped"
+			case schema.StopReasonMaxTokens:
+				m.status = "Stopped · token limit reached"
+			case schema.StopReasonMaxTurnRequests:
+				m.status = "Stopped · agent request limit reached"
+			case schema.StopReasonRefusal:
+				m.status = "Stopped · agent declined to continue"
+			default:
+				m.status = "Stopped · " + string(msg.reason)
+			}
+			if msg.reason != "" && msg.reason != schema.StopReasonEndTurn {
+				m.queuePaused = true
+			}
 		}
 		m.syncTranscript()
 		m.rebuildHistory()
