@@ -11,7 +11,10 @@ import (
 )
 
 func (m *model) markdown(text string) string {
-	width := max(12, m.width-4)
+	return m.markdownWidth(text, max(12, m.width-4))
+}
+
+func (m *model) markdownWidth(text string, width int) string {
 	key := fmt.Sprintf("%d:%s", width, text)
 	if cached, ok := m.renderCache[key]; ok {
 		return cached
@@ -59,61 +62,20 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 		}
 		return prefix + m.markdown(text) + "\n"
 	case "tool":
-		title, status := "Tool", ""
-		if message.Tool != nil {
-			title = message.Tool.Title
-			if message.Tool.Status != nil {
-				status = string(*message.Tool.Status)
-			}
-		} else if text != "" {
-			title = strings.Split(text, "\n")[0]
-		}
-		mark := "◦"
-		style := m.theme.muted
-		if status == "completed" {
-			mark = "✓"
-			style = m.theme.mint
-		}
-		if status == "failed" {
-			mark = "×"
-			style = m.theme.danger
-		}
-		if message.Cancelled {
-			mark = "×"
-			style = m.theme.amber
-			title += " · cancelled"
-			text = "Cancelled by client\nLast agent update:\n" + text
-		}
-		summary := style.Render(mark+" ") + line(title, width-2)
-		if details {
-			return summary + "\n" + ansi.Hardwrap(text, width, true) + "\n"
-		}
-		if message.Tool != nil {
-			for _, part := range message.Tool.Content {
-				if part.Diff != nil {
-					d := part.Diff
-					label := "updated"
-					if d.OldText == nil {
-						label = "created"
-					}
-					summary += "\n" + m.theme.muted.Render(line("  "+d.Path+" · "+label+" · Ctrl+O for diff", width))
-				}
-			}
-		}
-		return summary
+		return m.toolView(message, details, width)
 	case "thought":
 		if details {
 			return m.theme.muted.Render("Thinking\n"+ansi.Hardwrap(text, width, true)) + "\n"
 		}
 		return m.theme.muted.Render("· Thinking  " + line(strings.Join(strings.Fields(text), " "), max(10, width-13)))
 	case "terminal":
-		if details {
-			return m.theme.muted.Render("Terminal\n") + ansi.Hardwrap(text, width, true) + "\n"
-		}
 		lines := strings.Split(text, "\n")
-		summary := m.theme.muted.Render("$ " + line(lines[0], width-2))
+		summary := m.theme.amber.Render("$ " + line(lines[0], width-2))
+		if details {
+			return m.theme.amber.Render(ansi.Hardwrap("$ "+lines[0], width, true)) + "\n" + m.toolText(strings.Join(lines[1:], "\n"), width) + "\n"
+		}
 		if len(lines) > 1 {
-			summary += "\n" + m.theme.muted.Render("  "+line(lines[len(lines)-1], width-2))
+			summary += "\n  " + m.toolText(line(lines[len(lines)-1], width-2), width-2)
 		}
 		return summary
 	case "plan":
