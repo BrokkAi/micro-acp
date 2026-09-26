@@ -9,14 +9,19 @@ A conversation and a growing prompt in your normal terminal. Type `/` for inline
 
 ## Run
 
-Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
+Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README, ACP support matrix, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
 
 Building from source requires **Go 1.27.1 or newer**, matching `acp-go`'s toolchain requirement:
 
 ```sh
-go build -o bin/micro-acp .
+make build
 ./bin/micro-acp --demo
 ```
+
+Run these commands from a checkout of this repository. `make build` embeds the
+Git-derived version; `make build VERSION=...` overrides it. A plain
+`go build -o bin/micro-acp .` also works and reports `dev`. `--version`, ACP
+client identity, and registry requests all use the same build version.
 
 The demo runs a local ACP subprocess with persistent sessions and streaming text. It needs no model credentials and performs no coding work. Try `/mode` or `/settings`, send `permission` for an approval prompt, `form` for structured input, or `slow` to test cancellation. Demo settings reset when its process restarts.
 
@@ -43,6 +48,19 @@ For example, run `micro-acp --agent anvil`, `micro-acp --agent muse-acp`, or `mi
 
 ## Custom agents
 
+`micro-acp --help` lists all launch flags. Put flags before the subcommand or
+the `--` that introduces a custom agent:
+
+| Flag | Purpose |
+| --- | --- |
+| `--agent <id>` | Select a registry or configured agent instead of opening the picker. |
+| `--cwd <directory>` | Select the workspace; defaults to the current directory or a resumed session's saved workspace. |
+| `--session <local-id>` | Resume a saved session. |
+| `--config <file>` | Read a specific configuration file; a missing explicit file is an error. |
+| `--offline` | Use cached discovery metadata and installed native agents. |
+| `--demo` | Run the credential-free local demo. |
+| `--version` | Print the build version and exit. |
+
 Pass a stdio ACP executable and its arguments after `--`:
 
 ```sh
@@ -68,6 +86,11 @@ For reusable configurations, run `micro-acp config` to see paths and an example,
 ```
 
 Custom agent names take precedence over matching registry IDs. Keep secrets in your environment when possible. A different file can be selected with `--config /path/to/config.json`.
+
+`default_agent` selects the agent connected at startup when neither `--agent`
+nor a saved session chooses one. `registry_url` optionally replaces the
+official registry endpoint; omit it to use the default. `micro-acp config`
+prints paths and a sample; it does not create or edit the file.
 
 Configure MCP servers and additional workspace directories in the same file:
 
@@ -195,6 +218,11 @@ Default paths follow the XDG variables:
 
 Set `MICRO_ACP_HOME` to keep config, data, and cache under one directory. Session files are written atomically with private permissions. Saving happens before and after each prompt and on orderly shutdown; a hard crash can lose the currently streaming response. Concurrent instances should use different sessions, since writes to the same saved session use last-writer-wins semantics.
 
+Under `MICRO_ACP_HOME`, the paths are `config.json`, `data/sessions/`, and
+`cache/`. This override takes precedence over the XDG variables; `--config`
+then overrides only the configuration file. Demo history lives under `demo/`
+in the state directory (`data/demo/` with `MICRO_ACP_HOME`).
+
 The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). Native forks additionally use the SDK's opt-in unstable v1 schema. Draft ACP v2 and editor-specific experimental extensions are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
 
 ## Development
@@ -218,9 +246,12 @@ CI checks formatting, dependency integrity, vet, race-enabled tests, and builds 
 To publish a version, tag the intended commit after the workflow files have been pushed:
 
 ```sh
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
+RELEASE_TAG=vX.Y.Z
+git tag -a "$RELEASE_TAG" -m "Release $RELEASE_TAG"
+git push origin "$RELEASE_TAG"
 ```
+
+Replace `vX.Y.Z` with an unused release version.
 
 The release workflow reruns CI against that exact tag, then publishes the archives, checksums, and release notes to GitHub Releases. Tags must use semantic versions with a `v` prefix. Tags such as `v0.2.0-rc.1` create prereleases. Publishing uses the repository's built-in `GITHUB_TOKEN`; no extra release secret is needed.
 

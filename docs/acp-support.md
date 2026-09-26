@@ -10,7 +10,7 @@ Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to c
 | `authenticate` | `/auth` method picker, agent login output and input requests. | `TestElicitationAndAuthenticationRoundTrips`. |
 | `logout` | `/logout`; capability checked by SDK, saves history and clears active session. | `TestElicitationAndAuthenticationRoundTrips`. |
 | `session/new` | `/new`, optional MCP servers and additional directories; handles setup callbacks before response. | Lifecycle, resume, workspace tests. |
-| `session/load` | `/sessions` or `/load`; reconstructs transcript from replay. | `TestSessionLifecycleAcrossProcesses`. |
+| `session/load` | `/sessions` or `/load`; reconstructs transcript from replay, retaining saved history when no replay arrives. | `TestSessionLifecycleAcrossProcesses`. |
 | `session/resume` | Preferred for saved history; remote-only sessions use load replay when available. Refreshes session configuration. | `TestResumeKeepsLocalTranscriptAndRefreshesState`, `TestRemoteOnlySessionLoadsHistoryWhenResumeIsAlsoAvailable`. |
 | `session/list` | Combines saved sessions with paginated remote results, filters by workspace, deduplicates. | Lifecycle tests. |
 | `session/close` | `/close`; saves local history, closes remote session, releases terminals. | Authentication/lifecycle fixture. |
@@ -48,7 +48,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | `current_mode_update` | Updates the current legacy mode. |
 | `config_option_update` | Refreshes open selectors, completions, and the persistent status line, including custom options, On/Off values, and model-dependent choices. |
 | `session_info_update` | Updates title and timestamp. |
-| `usage_update` | Displays context used/capacity and reported cost. |
+| `usage_update` | Stores used/capacity and reported cost; the status line displays the percentage of context remaining. |
 
 Prompts can carry text, resource links, images, audio, embedded text resources and embedded binary resources. Capability checks happen before sending. Full content blocks persist in local session files. The TUI renders text/resources and labels images, audio and binary data; it does not render bitmap images or play audio. Tool content supports text/resources, diffs and terminal references. `TestRichContentRoundTripAndPersistence` verifies these survive the actual stdio transport and disk storage.
 

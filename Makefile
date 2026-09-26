@@ -3,7 +3,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 build:
-	go build -trimpath -ldflags "-s -w -X main.version=$(VERSION)" -o bin/micro-acp .
+	go build -trimpath -ldflags "-s -w -X github.com/BrokkAi/micro-acp/internal/buildinfo.Version=$(VERSION)" -o bin/micro-acp .
 
 test:
 	go test -race ./...
