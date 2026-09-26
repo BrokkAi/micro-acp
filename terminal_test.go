@@ -118,6 +118,9 @@ func TestTerminalWorkflow(t *testing.T) {
 	contains("Walkthrough")
 	contains("✓ Stream words")
 	contains("/config")
+	// Session settings arrive before the UI handles the operation's result.
+	// Commands remain disabled until the busy indicator disappears.
+	wait("session ready for commands", func(s string) bool { return !strings.Contains(s, "Esc stop") })
 	send("/config\r")
 	contains("Session configuration")
 	contains("On · stream")

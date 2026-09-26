@@ -107,7 +107,7 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 			r := registry.Client{URL: cfg.RegistryURL, Cache: paths.Cache}
 			snapshot, err := r.Load(ctx, *offline)
 			if err != nil {
-				return err
+				snapshot.Warning = err.Error()
 			}
 			if snapshot.Warning != "" {
 				fmt.Fprintln(errOut, snapshot.Warning)
@@ -122,7 +122,7 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 			for _, name := range names {
 				fmt.Fprintf(w, "%s\t%s\tcustom\t%s\n", name, name, cfg.Agents[name].Command)
 			}
-			for _, a := range snapshot.Index.Agents {
+			for _, a := range registry.WithBuiltins(snapshot.Index.Agents) {
 				if _, ok := cfg.Agents[a.ID]; !ok {
 					fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Name, a.Version, a.Kind())
 				}

@@ -32,7 +32,7 @@ func localPath(root, name string) (string, error) {
 	return filepath.Join(root, name), nil
 }
 
-func (c Client) install(ctx context.Context, a Agent, b Binary) (config.Command, error) {
+func (c Client) install(ctx context.Context, a Agent, b Binary, offline bool) (config.Command, error) {
 	// Hash the full distribution so a same-version republish cannot reuse a stale install.
 	manifest, _ := json.Marshal(b)
 	sum := sha256.Sum256(manifest)
@@ -44,6 +44,9 @@ func (c Client) install(ctx context.Context, a Agent, b Binary) (config.Command,
 	launch := config.Command{Command: command, Args: b.Args, Env: b.Env}
 	if info, err := os.Stat(command); err == nil && info.Mode().IsRegular() {
 		return launch, nil
+	}
+	if offline {
+		return launch, fmt.Errorf("%s is not installed in the cache; connect once without --offline", a.Name)
 	}
 	if err := os.MkdirAll(filepath.Dir(dir), 0700); err != nil {
 		return launch, err
