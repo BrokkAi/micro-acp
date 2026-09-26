@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -49,7 +50,7 @@ func ToolText(tool schema.ToolCall) string {
 		}
 	}
 	writeJSON := func(label string, raw json.RawMessage) {
-		if len(raw) == 0 {
+		if !hasJSONValue(raw) {
 			return
 		}
 		var value any
@@ -102,11 +103,17 @@ func mergeTool(old schema.ToolCall, patch schema.ToolCallUpdate) schema.ToolCall
 	if patch.Locations != nil {
 		old.Locations = patch.Locations
 	}
-	if patch.RawInput != nil {
+	if hasJSONValue(patch.RawInput) {
 		old.RawInput = patch.RawInput
 	}
-	if patch.RawOutput != nil {
+	if hasJSONValue(patch.RawOutput) {
 		old.RawOutput = patch.RawOutput
 	}
 	return old
+}
+
+// ACP v1 treats omitted and null raw values identically, including in updates.
+func hasJSONValue(raw json.RawMessage) bool {
+	raw = bytes.TrimSpace(raw)
+	return len(raw) > 0 && !bytes.Equal(raw, []byte("null"))
 }

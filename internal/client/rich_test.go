@@ -222,6 +222,7 @@ func serveRichAgent() {
 				map[string]any{"sessionUpdate": "usage_update", "used": 100, "size": 4096, "cost": map[string]any{"amount": 0.02, "currency": "USD"}},
 				map[string]any{"sessionUpdate": "tool_call", "toolCallId": "edit", "title": "Edit file", "status": "in_progress", "rawInput": map[string]any{"path": "main.go"}, "content": []any{map[string]any{"type": "diff", "path": "main.go", "oldText": "old", "newText": "new"}}},
 				map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "edit", "status": "completed", "rawOutput": map[string]any{"ok": true}},
+				map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": "edit", "rawInput": nil, "rawOutput": nil},
 				map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Received " + p.Prompt[0].Text.Text}},
 			}
 			for _, u := range updates {
@@ -345,7 +346,7 @@ func TestAgentDrivenConfigurationAndRichUpdates(t *testing.T) {
 			tool = entry.Text
 		}
 	}
-	for _, want := range []string{"completed", "main.go", "- old", "+ new", "\"ok\": true"} {
+	for _, want := range []string{"completed", "\"path\": \"main.go\"", "- old", "+ new", "\"ok\": true"} {
 		if !strings.Contains(tool, want) {
 			t.Errorf("tool missing %q: %s", want, tool)
 		}
