@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/acp-go/schema"
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -261,7 +262,9 @@ func (m *model) View() tea.View {
 	if before != "" {
 		inputY = lipgloss.Height(before)
 	}
-	parts = append(parts, inputView, m.theme.rule.Render(strings.Repeat("─", w)))
+	version := line("micro-acp "+buildinfo.Version, w-2)
+	bottomRule := strings.Repeat("─", w-ansi.StringWidth(version)-1) + " "
+	parts = append(parts, inputView, m.theme.rule.Render(bottomRule)+m.theme.muted.Render(version))
 	parts = append(parts, footer)
 	content := strings.Join(parts, "\n")
 	v := tea.NewView(lipgloss.NewStyle().PaddingLeft(1).Render(content))

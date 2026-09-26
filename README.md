@@ -20,8 +20,9 @@ make build
 
 Run these commands from a checkout of this repository. `make build` embeds the
 Git-derived version; `make build VERSION=...` overrides it. A plain
-`go build -o bin/micro-acp .` also works and reports `dev`. `--version`, ACP
-client identity, and registry requests all use the same build version.
+`go build -o bin/micro-acp .` also works and reports `dev`. The prompt's lower
+border shows `micro-acp <version>`. It uses the same build version as
+`--version`, ACP client identity, and registry requests.
 
 The demo runs a local ACP subprocess with persistent sessions and streaming text. It needs no model credentials and performs no coding work. Try `/mode` or `/settings`, send `permission` for an approval prompt, `form` for structured input, or `slow` to test cancellation. Demo settings reset when its process restarts.
 
@@ -151,7 +152,9 @@ The persistent status line below the prompt shows compact values for the connect
 
 `/model`, `/mode`, and `/effort` are shortcuts to the corresponding options, with completion and direct values such as `/model <id>`. Model changes refresh dependent choices such as reasoning effort.
 
-Responses stream as Markdown. Tool calls appear as compact status rows with file-change summaries; reasoning and terminal output stay compact too. Agent plans appear in a live checklist above the prompt, with completed (✓), current (›), and pending (○) steps, explicit high/medium/low priorities, and a completion count. Long plans keep the current step visible. Press **Ctrl+O** or run `/details` for a scrollable transcript with full plan history, tool input/output, reasoning, file locations, old/new diffs, and client terminal output. Press Esc to return to your draft. Tool updates retain earlier details when a later update only changes status. Non-text content is preserved in session files; images and audio appear as descriptive markers in the terminal.
+Responses stream as Markdown. Tool calls appear as compact status rows with file-change summaries. Tool titles use cyan for reads/searches, amber for commands, blue for edits, and red for failures/deletions; file paths and change labels are colored separately. Reasoning and terminal output stay compact too, with success, warning, and error lines highlighted. Agent plans appear in a live checklist above the prompt, with completed (✓), current (›), and pending (○) steps, explicit high/medium/low priorities, and a completion count. Long plans keep the current step visible.
+
+Press **Ctrl+O** or run `/details` for a scrollable transcript with labeled tool inputs and results, multiline output, file locations, and unified diffs with green additions and red removals. Structured payloads appear as readable fields and lists; full plan history, reasoning, and client terminal output are included. Press Esc to return to your draft. Tool updates retain earlier details when a later update only changes status. Original tool payloads and non-text content are preserved in session files; images and audio appear as descriptive markers in the terminal.
 
 Agent-provided slash commands appear alongside client commands as you type `/`. Up/Down selects a suggestion, Tab completes it, and Enter runs it; commands that need arguments leave the cursor ready for those arguments. Unknown slash commands are sent to the agent as prompts. If an agent command shares a client command's name, use `/agent <command>`, for example `/agent new`. Compaction is available through an agent's advertised command when it offers one.
 

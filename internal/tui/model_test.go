@@ -23,7 +23,7 @@ func TestCancelledToolPresentationRetainsAgentDetails(t *testing.T) {
 		t.Fatalf("cancelled tool still looks active: %s", summary)
 	}
 	details := ansi.Strip(m.messageView(message, true, false))
-	if !strings.Contains(details, "Cancelled by client") || !strings.Contains(details, "Last agent update:\nRun tests · in_progress") {
+	if !strings.Contains(details, "Cancelled by client") || !strings.Contains(details, "in progress") {
 		t.Fatalf("missing cancellation or original details: %s", details)
 	}
 }
