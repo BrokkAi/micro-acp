@@ -114,6 +114,7 @@ type model struct {
 	printedSession             string
 	printedIndex, streamPrefix int
 	live                       string
+	plan                       *schema.Plan
 	renderCache                map[string]string
 	printQueue                 []string
 	printing, quitting         bool
@@ -267,6 +268,7 @@ func (m *model) connect(selected item) tea.Cmd {
 	old := m.client
 	m.client = nil
 	m.live = ""
+	m.plan = nil
 	m.permission = nil
 	m.permissionQueue = nil
 	m.elicitation = nil

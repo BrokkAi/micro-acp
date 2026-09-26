@@ -144,6 +144,7 @@ func stablePrefix(text string) int {
 }
 func (m *model) syncTranscript() {
 	if m.client == nil {
+		m.plan = nil
 		return
 	}
 	// Session operations can replay several chunks into the same message.
@@ -154,8 +155,10 @@ func (m *model) syncTranscript() {
 	s, _ := m.client.Snapshot()
 	if s.ID == "" || s.RemoteID == "" {
 		m.live = ""
+		m.plan = nil
 		return
 	}
+	m.plan = s.Plan
 	if s.ID != m.printedSession {
 		inherited := 0
 		if s.ParentID == m.printedSession {
@@ -176,6 +179,12 @@ func (m *model) syncTranscript() {
 	for m.printedIndex < len(s.Messages) {
 		i := m.printedIndex
 		message := s.Messages[i]
+		if message.Role == "plan" {
+			// Plans update the live checklist; retain snapshots only in details.
+			m.printedIndex++
+			m.streamPrefix = 0
+			continue
+		}
 		last := i == len(s.Messages)-1
 		final := !m.prompting || m.quitting
 		if message.Role == "user" {
@@ -188,7 +197,7 @@ func (m *model) syncTranscript() {
 			status := *message.Tool.Status
 			final = final || status == schema.ToolCallStatusCompleted || status == schema.ToolCallStatusFailed
 		}
-		if message.Role == "plan" || message.Role == "notice" {
+		if message.Role == "notice" {
 			final = true
 		}
 		if message.Role == "assistant" && m.streamPrefix <= len(message.Text) {
@@ -215,6 +224,9 @@ func (m *model) syncTranscript() {
 	var live []string
 	for i := m.printedIndex; i < len(s.Messages); i++ {
 		message := s.Messages[i]
+		if message.Role == "plan" {
+			continue
+		}
 		continued := i == m.printedIndex && m.streamPrefix > 0
 		if continued && message.Role == "assistant" {
 			message.Text = message.Text[min(m.streamPrefix, len(message.Text)):]

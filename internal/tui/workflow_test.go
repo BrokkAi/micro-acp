@@ -25,6 +25,8 @@ func TestTUIAgentProcess(t *testing.T) {
 		var err error
 		if os.Getenv("MICRO_ACP_TUI_REPLAY") != "" {
 			err = agent.New(&chunkedReplayAgent{demo.Agent{Store: store.Store{Directory: path}}}).Serve(context.Background(), os.Stdin, os.Stdout)
+		} else if os.Getenv("MICRO_ACP_TUI_PLAN") != "" {
+			err = agent.New(&planAgent{demo.Agent{Store: store.Store{Directory: path}}}).Serve(context.Background(), os.Stdin, os.Stdout)
 		} else {
 			err = demo.Run(context.Background(), path)
 		}

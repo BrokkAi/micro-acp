@@ -145,7 +145,7 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		c.current.Plan = u.Plan
 		var lines []string
 		for _, entry := range u.Plan.Entries {
-			lines = append(lines, string(entry.Status)+"  "+entry.Content)
+			lines = append(lines, string(entry.Status)+"  ["+string(entry.Priority)+"] "+entry.Content)
 		}
 		c.current.Messages = append(c.current.Messages, store.Message{Role: "plan", Text: strings.Join(lines, "\n")})
 	case u.SessionInfoUpdate != nil:
