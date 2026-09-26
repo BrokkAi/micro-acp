@@ -108,12 +108,20 @@ func (s Store) List() ([]Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	return s.loadEntries(entries)
+}
+
+func (s Store) loadEntries(entries []os.DirEntry) ([]Session, error) {
 	sessions := make([]Session, 0, len(entries))
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
 		}
 		session, err := s.Load(strings.TrimSuffix(entry.Name(), ".json"))
+		// Another client may delete a session after the directory snapshot.
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
