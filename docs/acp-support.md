@@ -66,6 +66,24 @@ Form fields support the restricted flat schema: strings, integers, numbers, bool
 
 Run `make test` for the race-enabled suite and `make vet` for static checks. Tests use local subprocess agents and loopback registry servers; they do not use live model accounts. `--demo` exercises streaming, session history, settings, permission requests, forms and cancellation without credentials.
 
+## Coverage review: 2026-09-26
+
+The latest stable upstream release checked was [schema-v1.23.0](https://github.com/agentclientprotocol/agent-client-protocol/releases/tag/schema-v1.23.0). Its downloaded `meta.json` exactly matches the pinned SDK's stable method registry: 13 agent methods, 11 client methods and one protocol notification. The implementation paths above cover all 25, and all 11 stable [session update variants](https://agentclientprotocol.com/protocol/v1/prompt-turn#session-updates) have handlers. This review identified no missing stable method family. Negotiated capabilities still determine which optional methods a connected agent supports.
+
+Behavioral checks include complete [plan replacement](https://agentclientprotocol.com/protocol/v1/agent-plan#updating-plans), explicit [stop reasons and cancellation](https://agentclientprotocol.com/protocol/v1/prompt-turn), and preservation of previous tool input/output when a [partial update supplies null](https://agentclientprotocol.com/protocol/v1/tool-calls). The support matrix describes their presentation and regression coverage. Method coverage and fixture tests do not establish interoperability with every agent or exhaustive conformance for every payload.
+
+The following features remain outside the implementation. Upstream status is recorded as of this review; preview and draft contracts can change.
+
+| Remaining feature | Status and current behavior |
+| --- | --- |
+| Compaction lifecycle and summaries | [Preview](https://agentclientprotocol.com/rfds/session-compaction): no `compaction_update` / `compaction_summary_chunk` handling or advertised `session.compaction` capability. Agents can still expose a slash command or ordinary messages; context usage updates are supported. |
+| Structured advisory notices | [Preview](https://agentclientprotocol.com/rfds/session-notices): no advertised `session.notices` capability or dedicated `notice` update UI. Local client notices are separate from this protocol extension. |
+| ACP v2 | [Draft](https://agentclientprotocol.com/announcements/acp-v2-draft): no v2 negotiation, revised authentication, accepted-prompt/state lifecycle, message replacement or display-only terminal update surface. |
+| Remote agent transports | [Proposal in progress](https://agentclientprotocol.com/protocol/v1/transports): agents connect through stdio; no ACP Streamable HTTP or WebSocket connector. HTTP/SSE **MCP server configuration** is already supported and is a different transport boundary. |
+| Other proposed extensions | The [RFD index](https://agentclientprotocol.com/rfds/updates) lists draft plan operations, MCP-over-ACP/proxy chains, deletion-aware diffs, next-edit suggestions, configurable providers, end-turn token usage and authentication-state queries. These are not advertised or implemented. Native session fork is the explicitly supported unstable exception. |
+| Richer terminal presentation | Images/audio are accepted and retained as content where supported, but displayed as labels. There is no inline bitmap display, audio player, editor follow-along view or simultaneous conversation UI. These are product capabilities rather than additional stable ACP methods. |
+| Broader live-agent verification | Local fixtures cover protocol behavior. Only the live adapter check described below has been recorded; a registry-wide interoperability matrix remains future validation work. |
+
 ## Terminal interaction verification
 
 `TestTerminalWorkflow` runs the built application in a PTY with a Go terminal emulator. It checks what the terminal actually displays, including cursor movement when suggestions shrink, rather than only comparing `View()` strings. The credential-free demo covers the core composer and session workflows; smaller TUI tests cover Unicode references, paste/history, ignored files, queue context, and compact dialogs. A live `codex-acp` 1.13.1 file-edit check was also run on 2026-09-25; other registry adapters have not been exercised live.
