@@ -584,6 +584,9 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 		}
 	}()
 	if err = c.Save(); err != nil {
+		// A follow-up can already be waiting for this prompt's first activity.
+		// Release it as unconsumed even when the initial save prevents dispatch.
+		err = errors.Join(err, c.finishSteering(ctx))
 		return "", err
 	}
 	if s.PendingContext != "" {

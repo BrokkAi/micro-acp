@@ -95,7 +95,7 @@ func (c *Client) SteerContent(sessionID string, blocks []acp.Content) (outcome S
 			if stopping {
 				return "", errors.New("turn is stopping; follow-up retained in queue")
 			}
-			if !s.ready {
+			if !s.ready || (s.promptReturned && s.detachedGeneration == 0) {
 				return SteeringPromptRequired, nil
 			}
 			break

@@ -221,6 +221,20 @@ func TestSteeringWithoutActiveTurnLeavesInputWithCaller(t *testing.T) {
 	}
 }
 
+func TestSteeringAfterPromptResponseDoesNotStartDetachedWork(t *testing.T) {
+	c, _ := steeringClient(t, func(context.Context, string, json.RawMessage) (any, error) {
+		t.Error("completed prompt was steered again")
+		return nil, nil
+	})
+	// Another delivery can keep the local turn open briefly after its RPC ends.
+	c.turnDone = make(chan struct{})
+	c.steering = steeringState{ready: true, promptReturned: true, wake: make(chan struct{})}
+	outcome, err := c.SteerContent(c.current.ID, []acp.Content{acp.NewTextContent("follow-up")})
+	if err != nil || outcome != SteeringPromptRequired || c.steering.pending != 0 || len(c.current.Messages) != 0 {
+		t.Fatalf("completed turn retained or consumed input: %s %v", outcome, err)
+	}
+}
+
 func TestSteeringWaitsForPromptActivity(t *testing.T) {
 	for _, streams := range []bool{false, true} {
 		t.Run(map[bool]string{false: "no-output", true: "streaming"}[streams], func(t *testing.T) {
