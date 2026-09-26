@@ -57,7 +57,7 @@ func (m *model) toolView(message store.Message, details bool, width int) string 
 		styledTitle := titleStyle.Bold(true).Render(ansi.Hardwrap(clean(title), width-2, true))
 		summary = markStyle.Render(mark+" ") + strings.ReplaceAll(styledTitle, "\n", "\n  ")
 		if message.Cancelled {
-			summary += "\n  " + m.theme.amber.Render("Cancelled by client")
+			summary += "\n" + indentTool(m.theme.amber.Render(ansi.Hardwrap("Cancelled by client", width-2, true)), 2)
 		}
 		if tool == nil {
 			return summary + "\n" + m.toolText(message.Text, width) + "\n"
@@ -120,8 +120,6 @@ func (m *model) toolDetails(tool schema.ToolCall, width int) string {
 				text := strings.TrimSpace(block.Text.Text)
 				if (strings.HasPrefix(text, "{") || strings.HasPrefix(text, "[")) && json.Valid([]byte(text)) {
 					body = m.toolRaw(json.RawMessage(text), w)
-				} else if strings.Contains(text, "```") || strings.Contains(text, "**") {
-					body = m.markdownWidth(text, w)
 				}
 			}
 			section("Output", body)

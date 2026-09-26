@@ -11,10 +11,7 @@ import (
 )
 
 func (m *model) markdown(text string) string {
-	return m.markdownWidth(text, max(12, m.width-4))
-}
-
-func (m *model) markdownWidth(text string, width int) string {
+	width := max(12, m.width-4)
 	key := fmt.Sprintf("%d:%s", width, text)
 	if cached, ok := m.renderCache[key]; ok {
 		return cached

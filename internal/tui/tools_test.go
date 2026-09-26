@@ -155,6 +155,7 @@ func TestToolPresentationColorsKindsAndStates(t *testing.T) {
 func TestToolDetailsWrapAndSanitizeWithoutLosingValues(t *testing.T) {
 	m := newModel(context.Background(), Options{})
 	message := toolMessage(t, `{"toolCallId":"test","title":"A long tool title with 日本語 and emoji 🛠","name":"long-tool-name","rawInput":{"very_long_field_name":{"nested":{"items":["a very long value that must not disappear",false,0]}}},"rawOutput":"error: unsafe\u001b]52;c;secret\u0007\u001b[31m output\n\tindented line"}`)
+	message.Cancelled = true
 	for _, width := range []int{20, 35, 80} {
 		m.width = width
 		got := m.messageView(message, true, false)
@@ -164,6 +165,34 @@ func TestToolDetailsWrapAndSanitizeWithoutLosingValues(t *testing.T) {
 		flat := strings.Join(strings.Fields(ansi.Strip(got)), "")
 		if !strings.Contains(flat, "averylongvaluethatmustnotdisappear") || strings.Contains(got, "secret") || strings.Contains(got, "\x1b]52") {
 			t.Fatalf("lost content or leaked terminal controls at width %d: %q", width, got)
+		}
+	}
+}
+
+func TestToolOutputKeepsLiteralCodeAndAvoidsFalseStatusColors(t *testing.T) {
+	m := newModel(context.Background(), Options{})
+	message := toolMessage(t, "{\"toolCallId\":\"read\",\"title\":\"Read script\",\"kind\":\"read\",\"content\":[{\"type\":\"content\",\"content\":{\"type\":\"text\",\"text\":\"**/*.go\\n2 ** 8\\n`literal backticks`\\n- bullet item\\npassword accepted\"}}]}")
+	got := m.messageView(message, true, false)
+	for _, want := range []string{"**/*.go", "2 ** 8", "`literal backticks`", "- bullet item", "password accepted"} {
+		if !strings.Contains(ansi.Strip(got), want) {
+			t.Errorf("tool output interpreted literal code %q as formatting:\n%s", want, got)
+		}
+		if rendered := m.toolText(want, 70); strings.Contains(rendered, "\x1b[") {
+			t.Errorf("ordinary output incorrectly marked as status or diff: %q", rendered)
+		}
+	}
+	for _, tt := range []struct {
+		text  string
+		style lipgloss.Style
+	}{
+		{"ERROR: failed to compile", m.theme.danger},
+		{"warning: deprecated", m.theme.amber},
+		{"PASS", m.theme.mint},
+		{"Exit: 0", m.theme.mint},
+		{"Exit: 1", m.theme.danger},
+	} {
+		if got := m.toolText(tt.text, 70); got != tt.style.Render(tt.text) {
+			t.Errorf("missing status color for %q: %q", tt.text, got)
 		}
 	}
 }
