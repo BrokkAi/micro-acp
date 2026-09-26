@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 )
 
 func TestCLIWithoutTerminal(t *testing.T) {
@@ -18,6 +20,9 @@ func TestCLIWithoutTerminal(t *testing.T) {
 		}
 		if out.Len()+stderr.Len() == 0 {
 			t.Fatalf("%v produced no output", args)
+		}
+		if args[0] == "--version" && strings.TrimSpace(out.String()) != buildinfo.Version {
+			t.Fatalf("CLI version %q does not match build %q", out.String(), buildinfo.Version)
 		}
 	}
 }

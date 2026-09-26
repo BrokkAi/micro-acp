@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
 )
 
@@ -21,6 +22,9 @@ func TestRegistryRefreshAndOfflineCache(t *testing.T) {
 	var version atomic.Int32
 	version.Store(1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got, want := r.UserAgent(), "micro-acp/"+buildinfo.Version; got != want {
+			t.Errorf("registry client version: got %q, want %q", got, want)
+		}
 		if version.Load() == 2 {
 			http.Error(w, "unavailable", 503)
 			return
