@@ -20,8 +20,9 @@ make build
 
 Run these commands from a checkout of this repository. `make build` embeds the
 Git-derived version; `make build VERSION=...` overrides it. A plain
-`go build -o bin/micro-acp .` also works and reports `dev`. `--version`, ACP
-client identity, and registry requests all use the same build version.
+`go build -o bin/micro-acp .` also works and reports `dev`. The prompt's lower
+border shows `micro-acp <version>`. It uses the same build version as
+`--version`, ACP client identity, and registry requests.
 
 The demo runs a local ACP subprocess with persistent sessions and streaming text. It needs no model credentials and performs no coding work. Try `/mode` or `/settings`, send `permission` for an approval prompt, `form` for structured input, or `slow` to test cancellation. Demo settings reset when its process restarts.
 
