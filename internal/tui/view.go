@@ -122,6 +122,9 @@ func (m *model) pickerView(height int) string {
 	if p.kind == "sessions" {
 		hint += " · Ctrl+D delete"
 	}
+	if p.kind == "queue" {
+		hint = "Enter edit · Ctrl+D remove · Esc back"
+	}
 	return result + "\n" + m.theme.muted.Render(line(hint, w))
 }
 func (m *model) permissionView(height int) string {
@@ -176,17 +179,19 @@ func (m *model) View() tea.View {
 		if n := len(m.attachments) + len(m.resources); n > 0 {
 			badges = append(badges, m.theme.muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
 		}
-		if len(m.queued) > 0 {
-			hint := fmt.Sprintf("%d queued · /queue to edit", len(m.queued))
-			if m.queuePaused {
-				hint += " · /queue send to continue"
-			}
-			badges = append(badges, m.theme.muted.Render(line(hint, w)))
+		if queue := m.queueView(w); queue != "" {
+			badges = append(badges, queue)
 		}
 	}
 	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
 	if m.prompting && m.input.Value() != "" {
-		footer = "Enter queue prompt · Esc stop · Alt+Enter newline"
+		footer = "Enter/Tab queue · Esc stop · Alt+Enter newline"
+		if m.client != nil && m.client.CanSteer() && !m.queuePaused {
+			footer = "Enter steer · Tab queue · Esc stop · Alt+Enter newline"
+		}
+	}
+	if m.editing != nil {
+		footer = "Enter save queued prompt · Esc restore draft"
 	}
 	footer = m.theme.muted.Render(line(footer, w))
 	if m.client != nil {

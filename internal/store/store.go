@@ -24,6 +24,8 @@ type Message struct {
 	Tool    *schema.ToolCall      `json:"tool,omitempty"`
 	// Cancelled is a local display state; ACP v1 has no cancelled tool status.
 	Cancelled bool `json:"cancelled,omitempty"`
+	// Pending steering is withheld from scrollback and saved history until accepted.
+	Pending bool `json:"-"`
 }
 
 type Session struct {

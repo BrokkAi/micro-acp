@@ -176,24 +176,28 @@ Form requests support strings, numbers, integers, booleans, single choices, and 
 
 | Key | Action |
 | --- | --- |
-| Enter | Send prompt or select a list entry. |
+| Enter | Send a prompt; steer the active turn when supported, otherwise queue it. Select a list entry or save an edited queue entry. |
 | Alt+Enter / Ctrl+J | Insert a newline. Shift+Enter also works in compatible terminals. |
 | Ctrl+P | Compact command search. |
 | Ctrl+O | Expand full transcript and tool details; press again or Esc to return. |
 | Ctrl+G | Agent picker. |
 | Ctrl+S | Session picker. |
 | Ctrl+N | New session. |
-| Tab | Complete the selected command, setting, or `@file` suggestion. |
-| Up / Alt+Up, Down / Alt+Down | Recall prompt history; Up works on the first input line. |
+| Tab | Complete the selected suggestion; otherwise queue a follow-up while the agent works. |
+| Alt+Up | Edit the latest queued prompt, keeping the current draft for later; otherwise recall prompt history. |
+| Up, Down / Alt+Down | Recall prompt history; Up works on the first input line. |
 | Terminal scrollback / mouse wheel | Scroll completed output; mouse selection is available. |
 | Page Up / Page Down | Scroll expanded details and dialog explanations. |
-| Esc | Dismiss suggestions/dialogs first; otherwise stop the active turn. |
+| Esc | Restore an edited queue entry and the previous draft; otherwise dismiss suggestions/dialogs or stop the active turn. |
 | Ctrl+C | Stop an active turn; otherwise clear a draft, or press twice on an empty prompt to exit. |
 | Ctrl+D | Exit from an empty, idle prompt. |
 | Type in a selector | Filter immediately; one Enter selects, Esc returns to the draft. |
 | Ctrl+D in the session picker | Confirm deletion, or local removal if remote deletion is unsupported. |
+| Ctrl+D in the queue picker | Remove the selected queued prompt. |
 
-You can compose the next prompt while the agent works. Enter queues it, and queued prompts run in order after a successful turn. Stopping or failing a turn pauses the queue; `/queue` lets you edit an entry, and `/queue send` continues it. Queued prompts remain in memory and stay tied to their original session; they are not saved across restarts. Multiline paste stays in the draft until you send it.
+You can compose while the agent works. **Enter steers** an active turn when the agent advertises steering, including current Codex and Claude ACP adapters. **Tab queues** a separate follow-up, after any visible completion suggestion is handled. Agents without steering support queue Enter submissions too. Pending prompts appear above the composer and run in order after a successful turn.
+
+**Alt+Up** edits the latest queued prompt; `/queue` selects any entry. Editing pauses dispatch, retains the entry's position and attachments, and saves the draft you were typing. Enter saves the edit; Esc restores the original entry. Both return to your previous draft. Use Ctrl+D in `/queue` to remove an entry, `/queue clear` to remove queued work, and `/queue send` to resume after a stop or failure. An unconfirmed steering delivery stays in a paused queue for review instead of being resent automatically. Queues stay tied to their original session and remain in memory; they are not saved across restarts. Multiline paste stays in the draft until you send it.
 
 Other commands: `/agents`, `/help`, `/info`, `/auth`, `/logout`, `/refresh`, `/quit`. `/info` displays advertised capabilities and configuration. `/logs` shows recent agent stderr and the last error; `/reconnect` restarts the agent and reloads the saved session when supported. `/logout` requires the agent's logout capability.
 
@@ -226,7 +230,7 @@ Under `MICRO_ACP_HOME`, the paths are `config.json`, `data/sessions/`, and
 then overrides only the configuration file. Demo history lives under `demo/`
 in the state directory (`data/demo/` with `MICRO_ACP_HOME`).
 
-The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). Native forks additionally use the SDK's opt-in unstable v1 schema. Draft ACP v2 and editor-specific experimental extensions are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
+The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). Native forks additionally use the SDK's opt-in unstable v1 schema. Steering uses the advertised `_session/steering` extension. Draft ACP v2 and editor-specific experimental capabilities are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
 
 ## Development
 

@@ -93,10 +93,6 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			c, id, value := m.client, m.selector.ID, selected.id
 			return m.perform("Updating "+m.selector.Name, func() error { return c.SetConfig(id, value) })
 		case "queue":
-			if m.input.Value() != "" || len(m.attachments)+len(m.resources) > 0 {
-				m.lastError = "Send or clear the current draft before editing a queued prompt"
-				return nil
-			}
 			i := -1
 			for index, q := range m.queued {
 				if q.id == selected.value.(uint64) {
@@ -108,15 +104,21 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 				m.lastError = "This prompt has already been sent"
 				return nil
 			}
-			q := m.queued[i]
-			m.queued = append(m.queued[:i], m.queued[i+1:]...)
-			m.input.SetValue(q.text)
-			m.input.MoveToEnd()
-			m.attachments = q.attachments
-			m.resources = q.resources
+			m.editQueued(i)
 		}
 		return nil
 	case "ctrl+d":
+		if p.kind == "queue" && len(p.matches) > 0 {
+			id := p.matches[p.index].value.(uint64)
+			for i, q := range m.queued {
+				if q.id == id {
+					m.queued = append(m.queued[:i], m.queued[i+1:]...)
+					break
+				}
+			}
+			m.refreshQueuePicker()
+			return nil
+		}
 		if p.kind == "sessions" && len(p.matches) > 0 {
 			s := p.matches[p.index].value.(store.Session)
 			m.confirm = &s
@@ -134,7 +136,11 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 func (m *model) queueItems() []item {
 	var entries []item
 	for _, q := range m.queued {
-		entries = append(entries, item{title: q.text, description: "Enter to edit this queued prompt", id: strconv.FormatUint(q.id, 10), value: q.id})
+		description := "Enter edit · Ctrl+D remove"
+		if q.deliveryError != "" {
+			description = q.deliveryError
+		}
+		entries = append(entries, item{title: q.text, description: description, id: strconv.FormatUint(q.id, 10), value: q.id})
 	}
 	return entries
 }

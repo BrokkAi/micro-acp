@@ -194,6 +194,8 @@ func TestTerminalWorkflow(t *testing.T) {
 	contains("Queued prompts")
 	send("\r")
 	contains("❯ queued followup")
+	send("\x1b")
+	wait("queue edit cancelled", func(s string) bool { return !strings.Contains(s, "Editing queued prompt") })
 	send("\x15/new\r")
 	waitSessions(2)
 	send("/sessions\r")
