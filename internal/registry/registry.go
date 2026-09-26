@@ -15,6 +15,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
 )
 
@@ -108,7 +109,7 @@ func (c Client) Load(ctx context.Context, offline bool) (Snapshot, error) {
 		return Snapshot{}, err
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", "micro-acp/0.1.0")
+	req.Header.Set("User-Agent", "micro-acp/"+buildinfo.Version)
 	if cacheErr == nil && cached.ETag != "" {
 		req.Header.Set("If-None-Match", cached.ETag)
 	}

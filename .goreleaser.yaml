@@ -16,7 +16,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X main.version={{ .Version }}
+      - -s -w -X github.com/BrokkAi/micro-acp/internal/buildinfo.Version={{ .Version }}
 
 archives:
   - formats: [tar.gz]

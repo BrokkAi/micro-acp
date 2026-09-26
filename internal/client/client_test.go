@@ -12,6 +12,7 @@ import (
 
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/demo"
@@ -41,6 +42,15 @@ func TestAgentProcess(t *testing.T) {
 		<-ready
 		switch method {
 		case "initialize":
+			if mode == "version" {
+				var request schema.InitializeRequest
+				if err := json.Unmarshal(raw, &request); err != nil {
+					return nil, err
+				}
+				if request.ClientInfo == nil || request.ClientInfo.Name != "micro-acp" || request.ClientInfo.Version != buildinfo.Version {
+					return nil, fmt.Errorf("client identity %+v does not report build %q", request.ClientInfo, buildinfo.Version)
+				}
+			}
 			if mode == "native-replay" {
 				return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"fork": map[string]any{}, "resume": map[string]any{}}}}, nil
 			}
@@ -104,6 +114,11 @@ func openTest(t *testing.T, mode, cwd, data string, st store.Store) *client.Clie
 	})
 	return c
 }
+
+func TestClientReportsBuildVersion(t *testing.T) {
+	openTest(t, "version", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+}
+
 func require(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {

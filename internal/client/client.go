@@ -20,6 +20,7 @@ import (
 	"github.com/BrokkAi/acp-go/clienthost"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/acp-go/schema/unstable"
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
@@ -152,7 +153,7 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 	caps.Auth = &schema.AuthCapabilities{Terminal: &terminalAuth}
 	err = c.conn.Call(setup, schema.InitializeMethodName, schema.InitializeRequest{
 		ProtocolVersion: acp.Version, ClientCapabilities: &caps,
-		ClientInfo: &schema.Implementation{Name: "micro-acp", Version: "0.1.0"},
+		ClientInfo: &schema.Implementation{Name: "micro-acp", Version: buildinfo.Version},
 	}, &raw)
 	if err == nil {
 		err = json.Unmarshal(raw, &c.Init)

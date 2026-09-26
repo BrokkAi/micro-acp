@@ -16,6 +16,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/demo"
 	"github.com/BrokkAi/micro-acp/internal/registry"
@@ -23,8 +24,6 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/tui"
 	"golang.org/x/term"
 )
-
-var version = "0.1.0-dev"
 
 func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -78,7 +77,7 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 		return err
 	}
 	if *showVersion {
-		fmt.Fprintln(out, version)
+		fmt.Fprintln(out, buildinfo.Version)
 		return nil
 	}
 	explicitConfig := *configFile != ""

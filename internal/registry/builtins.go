@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
 )
 
@@ -134,7 +135,7 @@ func (c Client) fetchRelease(ctx context.Context, repository string) ([]byte, er
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("User-Agent", "micro-acp")
+	req.Header.Set("User-Agent", "micro-acp/"+buildinfo.Version)
 	res, err := c.httpClient().Do(req)
 	if err != nil {
 		return nil, err
