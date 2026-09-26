@@ -119,7 +119,7 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		chunk("thought", u.AgentThoughtChunk)
 	case u.ToolCall != nil:
 		t := u.ToolCall
-		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t})
+		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t, Cancelled: c.turnDone != nil && c.cancelRequested && unfinishedTool(t)})
 	case u.ToolCallUpdate != nil:
 		t := u.ToolCallUpdate
 		found := false
@@ -133,13 +133,14 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 				updated := mergeTool(previous, *t)
 				m.Tool = &updated
 				m.Text = ToolText(updated)
+				m.Cancelled = m.Cancelled && unfinishedTool(&updated)
 				found = true
 				break
 			}
 		}
 		if !found {
 			updated := mergeTool(schema.ToolCall{ToolCallID: t.ToolCallID}, *t)
-			c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(updated), Tool: &updated})
+			c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(updated), Tool: &updated, Cancelled: c.turnDone != nil && c.cancelRequested && unfinishedTool(&updated)})
 		}
 	case u.Plan != nil:
 		c.current.Plan = u.Plan

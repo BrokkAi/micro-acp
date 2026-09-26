@@ -22,6 +22,8 @@ type Message struct {
 	ID      string                `json:"id,omitempty"`
 	Content []schema.ContentBlock `json:"content,omitempty"`
 	Tool    *schema.ToolCall      `json:"tool,omitempty"`
+	// Cancelled is a local display state; ACP v1 has no cancelled tool status.
+	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 type Session struct {
