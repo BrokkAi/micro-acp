@@ -3,6 +3,7 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -37,7 +38,7 @@ func TestDurableSessionAndIndependentFork(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(filepath.Join(s.Directory, "sessions", parent.ID+".json"))
-	if err != nil || info.Mode().Perm() != 0600 {
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("private transcript: %v %v", info, err)
 	}
 }

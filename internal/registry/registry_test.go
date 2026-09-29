@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync/atomic"
 	"testing"
 
@@ -149,7 +150,7 @@ func TestCacheFilePrivate(t *testing.T) {
 		t.Fatal(err)
 	}
 	info, _ := os.Stat(path)
-	if info.Mode().Perm() != 0600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("permissions %v", info.Mode())
 	}
 }
