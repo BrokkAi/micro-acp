@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -32,9 +30,7 @@ func TestNPMVersionsPinLaunchRefreshAndOffline(t *testing.T) {
 		return metadataResponse(fmt.Sprintf(`{"name":"@brokkai/anvil","version":"1.2.%d"}`, version.Load())), nil
 	})}}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "npx"), []byte("#!/bin/sh\nexit 1\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	fakeCommand(t, dir, "npx")
 	t.Setenv("PATH", dir)
 	a := builtin(t, "anvil")
 	a.Distribution.NPX.Args = []string{"--acp"}

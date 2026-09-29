@@ -25,11 +25,11 @@ const maxArchive = 512 << 20
 const maxExtracted = 1 << 30
 
 func localPath(root, name string) (string, error) {
-	name = filepath.FromSlash(name)
-	if strings.Contains(name, "\\") || !filepath.IsLocal(name) {
+	// Reject backslashes before FromSlash turns every Windows separator into one.
+	if strings.Contains(name, "\\") || !filepath.IsLocal(filepath.FromSlash(name)) {
 		return "", fmt.Errorf("unsafe archive path %q", name)
 	}
-	return filepath.Join(root, name), nil
+	return filepath.Join(root, filepath.FromSlash(name)), nil
 }
 
 func (c Client) install(ctx context.Context, a Agent, b Binary, offline bool) (config.Command, error) {

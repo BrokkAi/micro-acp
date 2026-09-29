@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -26,6 +27,18 @@ func builtin(t *testing.T, id string) Agent {
 	}
 	t.Fatalf("missing built-in %s", id)
 	return Agent{}
+}
+
+// fakeCommand makes name resolvable on PATH; Windows only finds PATHEXT files.
+func fakeCommand(t *testing.T, dir, name string) {
+	t.Helper()
+	path, body := filepath.Join(dir, name), "#!/bin/sh\nexit 0\n"
+	if runtime.GOOS == "windows" {
+		path, body = path+".cmd", "@exit /b 0\r\n"
+	}
+	if err := os.WriteFile(path, []byte(body), 0700); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestBuiltinCatalogAndRegistryPrecedence(t *testing.T) {
@@ -46,9 +59,7 @@ func TestBuiltinCatalogAndRegistryPrecedence(t *testing.T) {
 
 func TestBuiltinNpmPackages(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "npx"), []byte("#!/bin/sh\nexit 0\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
+	fakeCommand(t, dir, "npx")
 	t.Setenv("PATH", dir)
 	c := Client{Cache: t.TempDir(), HTTP: &http.Client{Transport: metadataTransport(func(r *http.Request) (*http.Response, error) {
 		name := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/"), "/latest")

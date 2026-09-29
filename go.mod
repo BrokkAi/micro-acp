@@ -7,7 +7,7 @@ require (
 	charm.land/bubbletea/v2 v2.0.10
 	charm.land/glamour/v2 v2.0.1
 	charm.land/lipgloss/v2 v2.0.6
-	github.com/BrokkAi/acp-go v0.10.1-0.20260926083926-5b2c77c673e0
+	github.com/BrokkAi/acp-go v0.10.1-0.20260929130142-a5c9a46df65b
 	github.com/aymanbagabas/go-udiff v0.4.1
 	github.com/charmbracelet/x/ansi v0.11.8
 	github.com/charmbracelet/x/vt v0.0.0-20260924144451-d676b019604b
