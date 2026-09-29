@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -152,5 +153,20 @@ func TestCacheFilePrivate(t *testing.T) {
 	info, _ := os.Stat(path)
 	if runtime.GOOS != "windows" && info.Mode().Perm() != 0600 {
 		t.Fatalf("permissions %v", info.Mode())
+	}
+}
+func TestLocalPathAcceptsPublishedSlashes(t *testing.T) {
+	root := t.TempDir()
+	for name, ok := range map[string]bool{
+		"./agent.exe": true, "nested/agent": true,
+		"../escape": false, "/absolute": false, `nested\agent`: false, `..\escape`: false,
+	} {
+		path, err := localPath(root, name)
+		if (err == nil) != ok {
+			t.Fatalf("localPath(%q) = %q, %v; want ok=%v", name, path, err, ok)
+		}
+		if ok && !strings.HasPrefix(path, root+string(filepath.Separator)) {
+			t.Fatalf("localPath(%q) = %q outside %q", name, path, root)
+		}
 	}
 }
