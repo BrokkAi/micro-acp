@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -55,6 +56,63 @@ func TestAgentsListsBuiltinsOfflineAndHonorsCustomOverrides(t *testing.T) {
 		t.Fatalf("unresolved versions or custom overrides were mishandled: %s / %s", out.String(), warnings.String())
 	}
 }
+
+func TestAgentsAcceptsTrailingFlagsAndPrintsJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("MICRO_ACP_HOME", root)
+	if err := os.WriteFile(filepath.Join(root, "config.json"), []byte(`{"agents":{"local":{"command":"/custom/local"}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Flags may follow the subcommand instead of preceding it.
+	var text, warnings bytes.Buffer
+	if err := run(context.Background(), []string{"agents", "--offline"}, &text, &warnings); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"anvil", "muse-acp", "draupnir", "local"} {
+		if !strings.Contains(text.String(), id) {
+			t.Fatalf("trailing flags did not list %s:\n%s", id, text.String())
+		}
+	}
+
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"agents", "--offline", "--json"}, &out, &warnings); err != nil {
+		t.Fatal(err)
+	}
+	var rows []struct {
+		ID, Name, Version, Kind, Launch string
+	}
+	if err := json.Unmarshal(out.Bytes(), &rows); err != nil {
+		t.Fatalf("agents --json is not valid JSON: %v\n%s", err, out.String())
+	}
+	seen := map[string]bool{}
+	for _, row := range rows {
+		seen[row.ID] = true
+	}
+	for _, id := range []string{"anvil", "muse-acp", "draupnir", "local"} {
+		if !seen[id] {
+			t.Fatalf("agents --json missing %s:\n%s", id, out.String())
+		}
+	}
+}
+
+func TestExecInlineCommandSurvivesTrailingFlags(t *testing.T) {
+	t.Setenv("MICRO_ACP_HOME", t.TempDir())
+	original := stdin
+	t.Cleanup(func() { stdin = original })
+	stdin = strings.NewReader("hi\n")
+
+	var out bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing-agent")
+	err := run(context.Background(), []string{"exec", "--format", "json", "--", missing}, &out, &out)
+	if err == nil {
+		t.Fatal("expected the missing inline agent to fail")
+	}
+	if strings.Contains(err.Error(), "provide --agent") {
+		t.Fatalf("trailing flags swallowed the inline command: %v", err)
+	}
+}
+
 func TestCLIRejectsAmbiguousLaunchAndTraversal(t *testing.T) {
 	t.Setenv("MICRO_ACP_HOME", t.TempDir())
 	for _, args := range [][]string{{"--agent", "x", "--demo"}, {"--", ""}, {"sessions", "forget", "../../secret"}, {"unknown"}} {

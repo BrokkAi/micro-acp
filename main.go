@@ -12,9 +12,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/config"
@@ -38,6 +40,53 @@ func main() {
 	}
 }
 
+// cliFlags holds every flag the CLI accepts. The set is registered on the
+// top-level parser and again after a subcommand, so flags may appear on either
+// side of it: `micro-acp --offline agents` and `micro-acp agents --offline`.
+type cliFlags struct {
+	agent      string
+	cwd        string
+	session    string
+	config     string
+	offline    bool
+	demo       bool
+	format     string
+	permission string
+	timeout    time.Duration
+	save       bool
+	method     string
+	json       bool
+	version    bool
+}
+
+func (f *cliFlags) register(fs *flag.FlagSet) {
+	fs.StringVar(&f.agent, "agent", f.agent, "registry ID or custom agent name")
+	fs.StringVar(&f.cwd, "cwd", f.cwd, "workspace directory (defaults to current directory)")
+	fs.StringVar(&f.session, "session", f.session, "resume a saved local session ID")
+	fs.StringVar(&f.config, "config", f.config, "configuration file")
+	fs.BoolVar(&f.offline, "offline", f.offline, "use the cached registry without a network request")
+	fs.BoolVar(&f.demo, "demo", f.demo, "try the TUI with a local demo agent; no credentials required")
+	fs.StringVar(&f.format, "format", f.format, "exec output format: text, json, or stream-json")
+	fs.StringVar(&f.permission, "permission", f.permission, "exec reply to permission requests: allow, deny, or fail")
+	fs.DurationVar(&f.timeout, "timeout", f.timeout, "exec deadline such as 90s; 0 means no limit")
+	fs.BoolVar(&f.save, "save", f.save, "exec: persist the session locally instead of running ephemeral")
+	fs.StringVar(&f.method, "method", f.method, "login method id, from a prior 'micro-acp login' listing")
+	fs.BoolVar(&f.json, "json", f.json, "agents: print machine-readable JSON")
+	fs.BoolVar(&f.version, "version", f.version, "print version")
+}
+
+// subcommands accept flags on either side of their name.
+var subcommands = map[string]bool{"exec": true, "login": true, "agents": true, "sessions": true, "config": true}
+
+// agentRow is one row of the agents listing, rendered as text or JSON.
+type agentRow struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Kind    string `json:"kind"`
+	Launch  string `json:"launch"`
+}
+
 func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	paths, err := config.DefaultPaths()
 	if err != nil {
@@ -46,20 +95,10 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	if len(args) > 0 && args[0] == "__demo-agent" {
 		return demo.Run(ctx, filepath.Join(paths.Data, "demo"))
 	}
+	opts := cliFlags{format: "text", permission: "deny"}
 	fs := flag.NewFlagSet("micro-acp", flag.ContinueOnError)
 	fs.SetOutput(errOut)
-	agent := fs.String("agent", "", "registry ID or custom agent name")
-	cwd := fs.String("cwd", "", "workspace directory (defaults to current directory)")
-	sessionID := fs.String("session", "", "resume a saved local session ID")
-	configFile := fs.String("config", "", "configuration file")
-	offline := fs.Bool("offline", false, "use the cached registry without a network request")
-	demoMode := fs.Bool("demo", false, "try the TUI with a local demo agent; no credentials required")
-	execFormat := fs.String("format", "text", "exec output format: text, json, or stream-json")
-	execPermission := fs.String("permission", "deny", "exec reply to permission requests: allow, deny, or fail")
-	execTimeout := fs.Duration("timeout", 0, "exec deadline such as 90s; 0 means no limit")
-	execSave := fs.Bool("save", false, "exec: persist the session locally instead of running ephemeral")
-	loginMethod := fs.String("method", "", "login method id, from a prior 'micro-acp login' listing")
-	showVersion := fs.Bool("version", false, "print version")
+	opts.register(fs)
 	fs.Usage = func() {
 		fmt.Fprint(errOut, `micro-acp — a small terminal client for ACP agents
 
@@ -78,9 +117,10 @@ Usage:
   micro-acp sessions forget <id>          Remove a local saved session
   micro-acp config                        Print paths and an example configuration
 
-Flags must precede subcommands. The format, permission, timeout, and save flags
-apply to exec; method applies to login. Session deletion and forks are available
-in the TUI.
+Flags may precede or follow a subcommand. The format, permission, timeout, and
+save flags apply to exec, method applies to login, and json applies to agents.
+Run 'micro-acp agents' to list valid agent ids. Session deletion and forks are
+available in the TUI.
 
 `)
 		fs.PrintDefaults()
@@ -91,13 +131,13 @@ in the TUI.
 		}
 		return err
 	}
-	if *showVersion {
+	if opts.version {
 		fmt.Fprintln(out, buildinfo.Version)
 		return nil
 	}
-	explicitConfig := *configFile != ""
+	explicitConfig := opts.config != ""
 	if explicitConfig {
-		paths.Config = *configFile
+		paths.Config = opts.config
 	}
 	cfg, err := config.Load(paths.Config, explicitConfig)
 	if err != nil {
@@ -112,20 +152,45 @@ in the TUI.
 			break
 		}
 	}
+	// Flags may also follow a subcommand. Reparse from its name with the same
+	// flag set, which keeps values already given before it unless repeated. A
+	// "--" still terminates flag parsing, so split there first and keep the
+	// marker for the inline custom-command form.
+	if len(remaining) > 0 && subcommands[remaining[0]] && (!custom || slices.Contains(remaining, "--")) {
+		name := remaining[0]
+		tail := remaining[1:]
+		flagArgs, commandArgs := tail, []string(nil)
+		for i, arg := range tail {
+			if arg == "--" {
+				flagArgs, commandArgs = tail[:i], tail[i:]
+				break
+			}
+		}
+		sub := flag.NewFlagSet("micro-acp "+name, flag.ContinueOnError)
+		sub.SetOutput(errOut)
+		opts.register(sub)
+		if err := sub.Parse(flagArgs); err != nil {
+			if errors.Is(err, flag.ErrHelp) {
+				return nil
+			}
+			return err
+		}
+		remaining = append([]string{name}, append(sub.Args(), commandArgs...)...)
+	}
 	if rest, ok := positionalSubcommand(remaining, custom, "exec"); ok {
 		return runExec(ctx, execOptions{
 			Config:     cfg,
 			Paths:      paths,
 			Store:      st,
-			Agent:      *agent,
-			Cwd:        *cwd,
-			Offline:    *offline,
-			Demo:       *demoMode,
-			Session:    *sessionID,
-			Format:     *execFormat,
-			Permission: *execPermission,
-			Timeout:    *execTimeout,
-			Save:       *execSave,
+			Agent:      opts.agent,
+			Cwd:        opts.cwd,
+			Offline:    opts.offline,
+			Demo:       opts.demo,
+			Session:    opts.session,
+			Format:     opts.format,
+			Permission: opts.permission,
+			Timeout:    opts.timeout,
+			Save:       opts.save,
 		}, rest, out, errOut)
 	}
 	if rest, ok := positionalSubcommand(remaining, custom, "login"); ok {
@@ -133,11 +198,11 @@ in the TUI.
 			Config:  cfg,
 			Paths:   paths,
 			Store:   st,
-			Agent:   *agent,
-			Cwd:     *cwd,
-			Offline: *offline,
-			Demo:    *demoMode,
-			Method:  *loginMethod,
+			Agent:   opts.agent,
+			Cwd:     opts.cwd,
+			Offline: opts.offline,
+			Demo:    opts.demo,
+			Method:  opts.method,
 		}, rest, out, errOut)
 	}
 	if !custom && len(remaining) > 0 {
@@ -147,22 +212,21 @@ in the TUI.
 				return errors.New("usage: micro-acp [flags] agents")
 			}
 			r := registry.Client{URL: cfg.RegistryURL, Cache: paths.Cache}
-			snapshot, err := r.Load(ctx, *offline)
+			snapshot, err := r.Load(ctx, opts.offline)
 			if err != nil {
 				snapshot.Warning = err.Error()
 			}
 			if snapshot.Warning != "" {
 				fmt.Fprintln(errOut, snapshot.Warning)
 			}
-			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tVERSION\tLAUNCH")
 			names := make([]string, 0, len(cfg.Agents))
 			for name := range cfg.Agents {
 				names = append(names, name)
 			}
 			sort.Strings(names)
+			rows := make([]agentRow, 0, len(cfg.Agents))
 			for _, name := range names {
-				fmt.Fprintf(w, "%s\t%s\tcustom\t%s\n", name, name, cfg.Agents[name].Command)
+				rows = append(rows, agentRow{ID: name, Name: name, Version: "custom", Kind: "custom", Launch: cfg.Agents[name].Command})
 			}
 			var agents []registry.Agent
 			for _, a := range registry.WithBuiltins(snapshot.Index.Agents) {
@@ -170,13 +234,26 @@ in the TUI.
 					agents = append(agents, a)
 				}
 			}
-			for _, a := range r.ResolveVersions(ctx, agents, *offline) {
+			for _, a := range r.ResolveVersions(ctx, agents, opts.offline) {
 				version := a.Version
 				if a.VersionError != "" {
 					version = "unavailable"
 					fmt.Fprintf(errOut, "%s: %s\n", a.Name, a.VersionError)
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", a.ID, a.Name, version, a.Kind())
+				rows = append(rows, agentRow{ID: a.ID, Name: a.Name, Version: version, Kind: a.Kind(), Launch: a.Kind()})
+			}
+			if opts.json {
+				encoded, err := json.Marshal(rows)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, string(encoded))
+				return nil
+			}
+			w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(w, "ID\tNAME\tVERSION\tLAUNCH")
+			for _, row := range rows {
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", row.ID, row.Name, row.Version, row.Launch)
 			}
 			return w.Flush()
 		case "sessions":
@@ -212,12 +289,12 @@ in the TUI.
 			return fmt.Errorf("unknown command %q (custom agent commands go after --)", remaining[0])
 		}
 	}
-	options := tui.Options{Config: cfg, Paths: paths, Agent: *agent, Offline: *offline}
+	options := tui.Options{Config: cfg, Paths: paths, Agent: opts.agent, Offline: opts.offline}
 	if custom {
 		if len(remaining) == 0 {
 			return errors.New("provide an agent command after --")
 		}
-		if *agent != "" || *demoMode {
+		if opts.agent != "" || opts.demo {
 			return errors.New("choose either --agent, --demo, or a custom command")
 		}
 		command := config.Command{Command: remaining[0], Args: remaining[1:]}
@@ -235,8 +312,8 @@ in the TUI.
 		options.Agent = "custom-" + hex.EncodeToString(hash[:4])
 		options.Command = &command
 	}
-	if *demoMode {
-		if *agent != "" {
+	if opts.demo {
+		if opts.agent != "" {
 			return errors.New("choose either --agent or --demo")
 		}
 		self, err := os.Executable()
@@ -247,8 +324,8 @@ in the TUI.
 		options.Command = &config.Command{Command: self, Args: []string{"__demo-agent"}}
 		options.Offline = true
 	}
-	if *sessionID != "" {
-		s, err := st.Load(*sessionID)
+	if opts.session != "" {
+		s, err := st.Load(opts.session)
 		if err != nil {
 			return err
 		}
@@ -258,8 +335,8 @@ in the TUI.
 		} else if options.Agent != s.Agent {
 			return errors.New("selected agent does not match the saved session")
 		}
-		if *cwd == "" {
-			*cwd = s.Cwd
+		if opts.cwd == "" {
+			opts.cwd = s.Cwd
 		}
 	}
 	if options.Agent == "" {
@@ -273,13 +350,13 @@ in the TUI.
 		options.Command = &config.Command{Command: self, Args: []string{"__demo-agent"}}
 		options.Offline = true
 	}
-	if *cwd == "" {
-		*cwd, err = os.Getwd()
+	if opts.cwd == "" {
+		opts.cwd, err = os.Getwd()
 		if err != nil {
 			return err
 		}
 	}
-	options.Cwd, err = filepath.Abs(*cwd)
+	options.Cwd, err = filepath.Abs(opts.cwd)
 	if err != nil {
 		return err
 	}

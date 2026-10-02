@@ -130,7 +130,7 @@ Exit codes: `0` success, `1` the login flow failed, `2` usage or an unknown meth
 ## Custom agents
 
 `micro-acp --help` lists all launch flags. Put flags before the subcommand or
-the `--` that introduces a custom agent:
+after it; flags must precede any `--` that introduces a custom command:
 
 | Flag | Purpose |
 | --- | --- |
@@ -142,6 +142,7 @@ the `--` that introduces a custom agent:
 | `--demo` | Run the credential-free local demo. |
 | `--method <id>` | Login method for `login`, as listed by `micro-acp login`. |
 | `--format`, `--permission`, `--timeout`, `--save` | Output, permission policy, deadline, and persistence for `exec`. |
+| `--json` | Machine-readable output for `agents`. |
 | `--version` | Print the build version and exit. |
 
 Pass a stdio ACP executable and its arguments after `--`:
@@ -151,7 +152,7 @@ Pass a stdio ACP executable and its arguments after `--`:
 ./bin/micro-acp --cwd /path/to/project -- my-agent serve
 ```
 
-Commands are executed directly as argv, without a shell. Flags for micro-acp must precede `--` or the subcommand. The executable must speak ACP over stdin/stdout and send its logs to stderr.
+Commands are executed directly as argv, without a shell. Flags for micro-acp may precede or follow a subcommand, but must precede the `--` that introduces a custom command. The executable must speak ACP over stdin/stdout and send its logs to stderr.
 
 For reusable configurations, run `micro-acp config` to see paths and an example, then create the indicated `config.json`:
 
