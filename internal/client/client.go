@@ -32,10 +32,12 @@ type Permission struct {
 }
 
 type Client struct {
-	Agent, Cwd       string
-	Init             acp.Initialization
-	CanFork          bool
-	Ephemeral        bool // suppresses local session persistence for headless runs
+	Agent, Cwd string
+	Init       acp.Initialization
+	CanFork    bool
+	// Ephemeral suppresses local session persistence for headless runs. Set it
+	// before creating or loading a session.
+	Ephemeral        bool
 	Permissions      chan Permission
 	Elicitations     chan Elicitation
 	urlElicitations  map[schema.ElicitationId]bool
