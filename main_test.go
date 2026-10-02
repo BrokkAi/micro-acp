@@ -96,6 +96,23 @@ func TestAgentsAcceptsTrailingFlagsAndPrintsJSON(t *testing.T) {
 	}
 }
 
+func TestExecInlineCommandSurvivesTrailingFlags(t *testing.T) {
+	t.Setenv("MICRO_ACP_HOME", t.TempDir())
+	original := stdin
+	t.Cleanup(func() { stdin = original })
+	stdin = strings.NewReader("hi\n")
+
+	var out bytes.Buffer
+	missing := filepath.Join(t.TempDir(), "missing-agent")
+	err := run(context.Background(), []string{"exec", "--format", "json", "--", missing}, &out, &out)
+	if err == nil {
+		t.Fatal("expected the missing inline agent to fail")
+	}
+	if strings.Contains(err.Error(), "provide --agent") {
+		t.Fatalf("trailing flags swallowed the inline command: %v", err)
+	}
+}
+
 func TestCLIRejectsAmbiguousLaunchAndTraversal(t *testing.T) {
 	t.Setenv("MICRO_ACP_HOME", t.TempDir())
 	for _, args := range [][]string{{"--agent", "x", "--demo"}, {"--", ""}, {"sessions", "forget", "../../secret"}, {"unknown"}} {
