@@ -58,6 +58,7 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	execPermission := fs.String("permission", "deny", "exec reply to permission requests: allow, deny, or fail")
 	execTimeout := fs.Duration("timeout", 0, "exec deadline such as 90s; 0 means no limit")
 	execSave := fs.Bool("save", false, "exec: persist the session locally instead of running ephemeral")
+	loginMethod := fs.String("method", "", "login method id, from a prior 'micro-acp login' listing")
 	showVersion := fs.Bool("version", false, "print version")
 	fs.Usage = func() {
 		fmt.Fprint(errOut, `micro-acp — a small terminal client for ACP agents
@@ -70,13 +71,16 @@ Usage:
   micro-acp --demo                        Try the local demo
   micro-acp [flags] exec <prompt>         Send one prompt without the TUI
   micro-acp [flags] exec -                Read the prompt from stdin
+  micro-acp [flags] login                 List an agent's login methods
+  micro-acp [flags] login --method <id>   Run one advertised login method
   micro-acp [flags] agents                List the latest registry and custom agents
   micro-acp sessions                      List saved sessions
   micro-acp sessions forget <id>          Remove a local saved session
   micro-acp config                        Print paths and an example configuration
 
 Flags must precede subcommands. The format, permission, timeout, and save flags
-apply to exec. Session deletion and forks are available in the TUI.
+apply to exec; method applies to login. Session deletion and forks are available
+in the TUI.
 
 `)
 		fs.PrintDefaults()
@@ -108,17 +112,7 @@ apply to exec. Session deletion and forks are available in the TUI.
 			break
 		}
 	}
-	// For the top-level custom-command form (`micro-acp -- agent`) flag parsing
-	// consumes the "--", so it is absent from remaining. A "--" still present in
-	// remaining belongs to exec's inline command form (`micro-acp exec -- agent`).
-	inlineCommand := false
-	for _, arg := range remaining {
-		if arg == "--" {
-			inlineCommand = true
-			break
-		}
-	}
-	if !(custom && !inlineCommand) && len(remaining) > 0 && remaining[0] == "exec" {
+	if rest, ok := positionalSubcommand(remaining, custom, "exec"); ok {
 		return runExec(ctx, execOptions{
 			Config:     cfg,
 			Paths:      paths,
@@ -132,7 +126,19 @@ apply to exec. Session deletion and forks are available in the TUI.
 			Permission: *execPermission,
 			Timeout:    *execTimeout,
 			Save:       *execSave,
-		}, remaining[1:], out, errOut)
+		}, rest, out, errOut)
+	}
+	if rest, ok := positionalSubcommand(remaining, custom, "login"); ok {
+		return runLogin(ctx, loginOptions{
+			Config:  cfg,
+			Paths:   paths,
+			Store:   st,
+			Agent:   *agent,
+			Cwd:     *cwd,
+			Offline: *offline,
+			Demo:    *demoMode,
+			Method:  *loginMethod,
+		}, rest, out, errOut)
 	}
 	if !custom && len(remaining) > 0 {
 		switch remaining[0] {

@@ -105,9 +105,23 @@ Flags must precede `exec`. Run `micro-acp agents` to list valid agent ids.
 | `--timeout <duration>` | `0` | Overall deadline such as `90s`; `0` means no limit. |
 | `--save` | off | Persist the session locally. Runs are ephemeral by default and leave no local trace. |
 
-Resume an existing conversation with `--session <local-id>`, which persists updates. The client advertises no elicitation support during `exec`, so agents ask for form or URL input only when they ignore that and it is declined; use the TUI when a flow needs interactive input. Authentication is still interactive: an agent that requires login exits `3` with its login method ids, so authenticate in the TUI with `/auth` first.
+Resume an existing conversation with `--session <local-id>`, which persists updates. The client advertises no elicitation support during `exec`, so agents ask for form or URL input only when they ignore that and it is declined; use the TUI when a flow needs interactive input. An agent that requires login exits `3` with its login method ids; authenticate first with `micro-acp login`.
 
 Exit codes: `0` normal, `1` error, `2` usage, `3` authentication required, `4` permission denied, `5` timeout, `6` the agent stopped for another reason.
+
+## Logging in
+
+`login` authenticates an agent without opening the TUI. With no `--method` it lists the methods the agent advertises, so scripts can discover the available ids:
+
+```sh
+./bin/micro-acp --agent <registry-id> login                       # list methods
+./bin/micro-acp --agent <registry-id> --method <method-id> login  # run one
+./bin/micro-acp login -- /path/to/my-agent --acp                  # custom command
+```
+
+Terminal methods re-invoke the agent with its advertised arguments and hand the login process the terminal, exactly like `/auth` in the TUI. Agent-managed methods use the ACP `authenticate` call. A headless login advertises no elicitation support, so a flow that needs form or URL input still needs the TUI. Existing environment variables and credentials are inherited.
+
+Exit codes: `0` success, `1` the login flow failed, `2` usage or an unknown method, `3` the agent offers no login methods.
 
 ## Custom agents
 
@@ -122,6 +136,8 @@ the `--` that introduces a custom agent:
 | `--config <file>` | Read a specific configuration file; a missing explicit file is an error. |
 | `--offline` | Use cached discovery metadata and installed native agents. |
 | `--demo` | Run the credential-free local demo. |
+| `--method <id>` | Login method for `login`, as listed by `micro-acp login`. |
+| `--format`, `--permission`, `--timeout`, `--save` | Output, permission policy, deadline, and persistence for `exec`. |
 | `--version` | Print the build version and exit. |
 
 Pass a stdio ACP executable and its arguments after `--`:
