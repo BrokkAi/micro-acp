@@ -1,12 +1,11 @@
-// Command fakeagent is a minimal ACP agent used by micro-acp's login tests. It
-// advertises one terminal login method and, when invoked with --login, records
-// the login in the file named by FAKE_LOGIN_MARKER. Set FAKE_NO_AUTH to make it
-// advertise no methods at all.
+// Command fakeagent is a minimal ACP agent used by micro-acp's tests. It serves
+// one session that always replies "fake reply", and advertises one terminal
+// login method that, when invoked with --login, records the login in the file
+// named by FAKE_LOGIN_MARKER. Set FAKE_NO_AUTH to advertise no login methods.
 package main
 
 import (
 	"context"
-	"errors"
 	"os"
 
 	acp "github.com/BrokkAi/acp-go"
@@ -21,6 +20,8 @@ func (fakeAgent) Initialize(context.Context, agent.Client, schema.InitializeRequ
 		ProtocolVersion: acp.Version,
 		AgentInfo:       &schema.Implementation{Name: "fake agent", Version: "1.0.0"},
 	}
+	load := true
+	response.AgentCapabilities = &schema.AgentCapabilities{LoadSession: &load}
 	if os.Getenv("FAKE_NO_AUTH") == "" {
 		description := "Record a login"
 		response.AuthMethods = []schema.AuthMethod{{
@@ -36,11 +37,19 @@ func (fakeAgent) Initialize(context.Context, agent.Client, schema.InitializeRequ
 }
 
 func (fakeAgent) NewSession(context.Context, agent.Client, schema.NewSessionRequest) (schema.NewSessionResponse, error) {
-	return schema.NewSessionResponse{}, errors.New("fake agent does not create sessions")
+	return schema.NewSessionResponse{SessionID: "fake-session"}, nil
 }
 
-func (fakeAgent) Prompt(context.Context, agent.Client, schema.PromptRequest, agent.SessionUpdater) (schema.PromptResponse, error) {
-	return schema.PromptResponse{}, errors.New("fake agent does not run prompts")
+func (fakeAgent) LoadSession(context.Context, agent.Client, schema.LoadSessionRequest) (schema.LoadSessionResponse, error) {
+	return schema.LoadSessionResponse{}, nil
+}
+
+func (fakeAgent) Prompt(_ context.Context, _ agent.Client, _ schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
+	chunk := schema.ContentChunk{Content: acp.NewTextContent("fake reply")}
+	if err := updates.Update(schema.SessionUpdate{AgentMessageChunk: &chunk}); err != nil {
+		return schema.PromptResponse{}, err
+	}
+	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 }
 
 func main() {

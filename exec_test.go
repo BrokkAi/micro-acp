@@ -4,10 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/BrokkAi/acp-go/schema"
+	"github.com/BrokkAi/micro-acp/internal/store"
 )
 
 func TestExecRejectsInvalidFlags(t *testing.T) {
@@ -64,6 +68,74 @@ func TestExecPromptJoinsArgsAndReadsStdin(t *testing.T) {
 	stdin = strings.NewReader("also piped\n")
 	if got, err := execPrompt([]string{"-"}); err != nil || got != "also piped" {
 		t.Fatalf("dash prompt = %q, %v", got, err)
+	}
+}
+
+func TestExecEphemeralByDefaultAndSavePersists(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a helper agent")
+	}
+	root := t.TempDir()
+	t.Setenv("MICRO_ACP_HOME", root)
+	agentPath := buildFakeAgent(t, root)
+	configPath := filepath.Join(root, "config.json")
+	contents := `{"agents":{"fake":{"command":` + strconv.Quote(agentPath) + `}}}`
+	if err := os.WriteFile(configPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	base := []string{"--config", configPath, "--agent", "fake", "--cwd", root}
+	args := func(extra ...string) []string {
+		return append(append([]string{}, base...), extra...)
+	}
+	st := store.Store{Directory: filepath.Join(root, "data")}
+
+	var out bytes.Buffer
+	if err := run(context.Background(), args("exec", "hi"), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "fake reply") {
+		t.Fatalf("exec did not print the reply: %s", out.String())
+	}
+	if sessions, err := st.List(); err != nil {
+		t.Fatal(err)
+	} else if len(sessions) != 0 {
+		t.Fatalf("default run persisted %d sessions, want none", len(sessions))
+	}
+
+	out.Reset()
+	if err := run(context.Background(), args("--save", "exec", "hi"), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := st.List()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("--save persisted %d sessions, want 1", len(sessions))
+	}
+	before := len(sessions[0].Messages)
+
+	// Resuming an existing session keeps updating it.
+	out.Reset()
+	if err := run(context.Background(), args("--session", sessions[0].ID, "exec", "again"), &out, &out); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := st.Load(sessions[0].ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resumed.Messages) <= before {
+		t.Fatalf("resume stored %d messages, want more than %d", len(resumed.Messages), before)
+	}
+}
+
+func TestExecRejectsEmptyPrompt(t *testing.T) {
+	t.Setenv("MICRO_ACP_HOME", t.TempDir())
+	var out bytes.Buffer
+	err := run(context.Background(), []string{"--demo", "exec", " "}, &out, &out)
+	var exit *exitError
+	if !errors.As(err, &exit) || exit.code != exitUsage {
+		t.Fatalf("want usage exit, got %v", err)
 	}
 }
 
