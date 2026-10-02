@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"text/tabwriter"
@@ -152,19 +153,29 @@ available in the TUI.
 		}
 	}
 	// Flags may also follow a subcommand. Reparse from its name with the same
-	// flag set, which keeps values already given before it unless repeated.
-	if !custom && len(remaining) > 0 && subcommands[remaining[0]] {
+	// flag set, which keeps values already given before it unless repeated. A
+	// "--" still terminates flag parsing, so split there first and keep the
+	// marker for the inline custom-command form.
+	if len(remaining) > 0 && subcommands[remaining[0]] && (!custom || slices.Contains(remaining, "--")) {
 		name := remaining[0]
+		tail := remaining[1:]
+		flagArgs, commandArgs := tail, []string(nil)
+		for i, arg := range tail {
+			if arg == "--" {
+				flagArgs, commandArgs = tail[:i], tail[i:]
+				break
+			}
+		}
 		sub := flag.NewFlagSet("micro-acp "+name, flag.ContinueOnError)
 		sub.SetOutput(errOut)
 		opts.register(sub)
-		if err := sub.Parse(remaining[1:]); err != nil {
+		if err := sub.Parse(flagArgs); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
 				return nil
 			}
 			return err
 		}
-		remaining = append([]string{name}, sub.Args()...)
+		remaining = append([]string{name}, append(sub.Args(), commandArgs...)...)
 	}
 	if rest, ok := positionalSubcommand(remaining, custom, "exec"); ok {
 		return runExec(ctx, execOptions{
