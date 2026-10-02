@@ -47,7 +47,7 @@ your answers before submitting.
 
 ## Run
 
-Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux and macOS binaries for amd64 and arm64. Each archive includes the executable, README with screenshots, ACP support matrix, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` on your PATH. Prebuilt binaries do not require Go.
+Tagged [releases](https://github.com/BrokkAi/micro-acp/releases) provide Linux, macOS, and Windows binaries for amd64 and arm64. Linux and macOS archives are `.tar.gz`; Windows archives are `.zip`. Each archive includes the executable, README with screenshots, ACP support matrix, and MIT license; `checksums.txt` contains SHA-256 checksums. Extract the archive and put `micro-acp` (or `micro-acp.exe`) on your PATH. Prebuilt binaries do not require Go.
 
 Building from source requires **Go 1.27.1 or newer**, matching `acp-go`'s toolchain requirement:
 
@@ -61,6 +61,10 @@ Git-derived version; `make build VERSION=...` overrides it. A plain
 `go build -o bin/micro-acp .` also works and reports `dev`. The prompt's lower
 border shows `micro-acp <version>`. It uses the same build version as
 `--version`, ACP client identity, and registry requests.
+
+On Windows, build with `go build -o bin/micro-acp.exe .` and run
+`bin\micro-acp.exe --demo`. `make` is not required and is not part of a stock
+Windows install.
 
 The demo runs a local ACP subprocess with persistent sessions and streaming text. It needs no model credentials and performs no coding work. Try `/mode` or `/settings`, send `permission` for an approval prompt, `form` for structured input, or `slow` to test cancellation. Demo settings reset when its process restarts.
 
@@ -313,7 +317,7 @@ The implementation is split into `internal/client` (ACP and process lifecycle), 
 
 ## Releases
 
-CI checks formatting, dependency integrity, vet, race-enabled tests, and builds on Linux and macOS. It also builds all four release archives with GoReleaser, verifies their checksums, and runs the packaged Linux executable without publishing anything.
+CI runs formatting checks on Linux and macOS and dependency, vet, race-enabled test, and build checks on Linux, macOS, and Windows. It also builds all six release archives with GoReleaser, verifies their checksums, and runs the packaged Linux executable without publishing anything.
 
 To publish a version, tag the intended commit after the workflow files have been pushed:
 
