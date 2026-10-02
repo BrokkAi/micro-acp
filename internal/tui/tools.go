@@ -29,55 +29,96 @@ func (m *model) toolStyle(tool *schema.ToolCall) lipgloss.Style {
 	return m.theme.accent
 }
 
-func (m *model) toolView(message store.Message, details bool, width int) string {
+type toolDiff struct{ path, label string }
+
+type toolSummary struct {
+	mark  string
+	title string
+	diffs []toolDiff
+}
+
+// summarizeTool extracts what the compact tool line shows. It is independent
+// of terminal width, so the transcript can detect real updates without
+// mistaking a resize for one.
+func summarizeTool(message store.Message) toolSummary {
+	summary := toolSummary{mark: "◦", title: "Tool"}
 	tool := message.Tool
-	title, status := "Tool", ""
 	if tool != nil {
-		title = tool.Title
+		summary.title = tool.Title
 		if tool.Status != nil {
-			status = string(*tool.Status)
-		}
-	} else if message.Text != "" {
-		title = strings.Split(message.Text, "\n")[0]
-	}
-	mark, markStyle, titleStyle := "◦", m.theme.muted, m.toolStyle(tool)
-	switch status {
-	case "completed":
-		mark, markStyle = "✓", m.theme.mint
-	case "failed":
-		mark, markStyle, titleStyle = "×", m.theme.danger, m.theme.danger
-	}
-	if message.Cancelled {
-		mark, markStyle, titleStyle = "×", m.theme.amber, m.theme.amber
-		title += " · cancelled"
-	}
-	summary := markStyle.Render(mark+" ") + titleStyle.Bold(true).Render(line(title, width-2))
-	if details {
-		// Details wrap the full title; compact scrollback keeps a single row.
-		styledTitle := titleStyle.Bold(true).Render(ansi.Hardwrap(clean(title), width-2, true))
-		summary = markStyle.Render(mark+" ") + strings.ReplaceAll(styledTitle, "\n", "\n  ")
-		if message.Cancelled {
-			summary += "\n" + indentTool(m.theme.amber.Render(ansi.Hardwrap("Cancelled by client", width-2, true)), 2)
-		}
-		if tool == nil {
-			return summary + "\n" + m.toolText(message.Text, width) + "\n"
-		}
-		return summary + "\n" + m.toolDetails(*tool, width) + "\n"
-	}
-	if tool != nil {
-		for _, part := range tool.Content {
-			if d := part.Diff; d != nil {
-				label, style := "updated", m.theme.accent
-				if d.OldText == nil {
-					label, style = "created", m.theme.mint
-				}
-				path := strings.ReplaceAll(clean(d.Path), "\n", " ")
-				row := m.theme.cyan.Render(path) + m.theme.muted.Render(" · ") + style.Render(label) + m.theme.muted.Render(" · Ctrl+O for diff")
-				summary += "\n  " + ansi.Truncate(row, width-2, "…")
+			switch *tool.Status {
+			case schema.ToolCallStatusCompleted:
+				summary.mark = "✓"
+			case schema.ToolCallStatusFailed:
+				summary.mark = "×"
 			}
 		}
+		for _, part := range tool.Content {
+			if part.Diff == nil {
+				continue
+			}
+			label := "updated"
+			if part.Diff.OldText == nil {
+				label = "created"
+			}
+			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(part.Diff.Path), "\n", " "), label: label})
+		}
+	} else if message.Text != "" {
+		summary.title = strings.Split(message.Text, "\n")[0]
 	}
+	if message.Cancelled {
+		summary.mark = "×"
+		summary.title += " · cancelled"
+	}
+	summary.title = strings.ReplaceAll(clean(summary.title), "\n", " ")
 	return summary
+}
+
+// toolSignature is the committed-transcript form of summarizeTool.
+func toolSignature(message store.Message) string {
+	summary := summarizeTool(message)
+	rows := []string{summary.mark + " " + summary.title}
+	for _, diff := range summary.diffs {
+		rows = append(rows, diff.path+" · "+diff.label)
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (m *model) toolView(message store.Message, details bool, width int) string {
+	tool := message.Tool
+	summary := summarizeTool(message)
+	markStyle, titleStyle := m.theme.muted, m.toolStyle(tool)
+	switch {
+	case tool != nil && tool.Status != nil && *tool.Status == schema.ToolCallStatusFailed:
+		markStyle, titleStyle = m.theme.danger, m.theme.danger
+	case tool != nil && tool.Status != nil && *tool.Status == schema.ToolCallStatusCompleted:
+		markStyle = m.theme.mint
+	}
+	if message.Cancelled {
+		markStyle, titleStyle = m.theme.amber, m.theme.amber
+	}
+	if details {
+		// Details wrap the full title; compact scrollback keeps a single row.
+		styledTitle := titleStyle.Bold(true).Render(ansi.Hardwrap(clean(summary.title), width-2, true))
+		rendered := markStyle.Render(summary.mark+" ") + strings.ReplaceAll(styledTitle, "\n", "\n  ")
+		if message.Cancelled {
+			rendered += "\n" + indentTool(m.theme.amber.Render(ansi.Hardwrap("Cancelled by client", width-2, true)), 2)
+		}
+		if tool == nil {
+			return rendered + "\n" + m.toolText(message.Text, width) + "\n"
+		}
+		return rendered + "\n" + m.toolDetails(*tool, width) + "\n"
+	}
+	rendered := markStyle.Render(summary.mark+" ") + titleStyle.Bold(true).Render(line(summary.title, width-2))
+	for _, diff := range summary.diffs {
+		style := m.theme.accent
+		if diff.label == "created" {
+			style = m.theme.mint
+		}
+		row := m.theme.cyan.Render(diff.path) + m.theme.muted.Render(" · ") + style.Render(diff.label) + m.theme.muted.Render(" · Ctrl+O for diff")
+		rendered += "\n  " + ansi.Truncate(row, width-2, "…")
+	}
+	return rendered
 }
 
 func (m *model) toolDetails(tool schema.ToolCall, width int) string {

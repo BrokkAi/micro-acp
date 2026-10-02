@@ -121,6 +121,8 @@ func (m *model) syncTranscript() {
 	if s.ID == "" || s.RemoteID == "" {
 		m.live = ""
 		m.plan = nil
+		m.committedIndex, m.committedText = -1, ""
+		m.committedTools = map[int]string{}
 		return
 	}
 	m.plan = s.Plan
@@ -132,6 +134,8 @@ func (m *model) syncTranscript() {
 		m.printedSession = s.ID
 		m.printedIndex = inherited
 		m.streamPrefix = 0
+		m.committedIndex, m.committedText = -1, ""
+		m.committedTools = map[int]string{}
 		label := m.client.Agent + " · " + s.Title
 		if s.ParentID != "" {
 			label += " · fork"
@@ -168,12 +172,17 @@ func (m *model) syncTranscript() {
 		if message.Role == "notice" {
 			final = true
 		}
+		committed := message.Text
 		if message.Role == "assistant" && m.streamPrefix <= len(message.Text) {
 			message.Text = message.Text[m.streamPrefix:]
 		}
 		if final {
 			if message.Text != "" {
 				m.queueOutput(m.messageView(message, false, m.streamPrefix > 0))
+			}
+			m.committedIndex, m.committedText = i, committed
+			if message.Role == "tool" {
+				m.committedTools[i] = toolSignature(message)
 			}
 			m.printedIndex++
 			m.streamPrefix = 0
@@ -188,6 +197,36 @@ func (m *model) syncTranscript() {
 			}
 		}
 		break
+	}
+	// Late updates can land after a message was committed, once the prompt
+	// response is already on the wire. Scrollback cannot be edited, so reprint
+	// what changed instead of leaving the transcript stale. Late text merges
+	// into the newest message; late tool updates are addressed by ID and can
+	// target any committed message.
+	if m.committedIndex >= 0 && m.committedIndex == len(s.Messages)-1 {
+		message := s.Messages[m.committedIndex]
+		textRole := message.Role == "assistant" || message.Role == "thought"
+		if textRole && message.Text != m.committedText && strings.HasPrefix(message.Text, m.committedText) {
+			delta := message
+			delta.Text = message.Text[len(m.committedText):]
+			// Keep the assistant bullet when nothing was committed yet.
+			m.queueOutput(m.messageView(delta, false, m.committedText != ""))
+			m.committedText = message.Text
+		}
+	}
+	for i := 0; i < m.printedIndex && i < len(s.Messages); i++ {
+		message := s.Messages[i]
+		if message.Role != "tool" {
+			continue
+		}
+		committed, ok := m.committedTools[i]
+		if !ok {
+			continue
+		}
+		if current := toolSignature(message); current != committed {
+			m.queueOutput(m.messageView(message, false, false))
+			m.committedTools[i] = current
+		}
 	}
 	var live []string
 	for i := m.printedIndex; i < len(s.Messages); i++ {

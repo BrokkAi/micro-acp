@@ -118,12 +118,21 @@ type model struct {
 	savedDraft                 *queuedPrompt
 	printedSession             string
 	printedIndex, streamPrefix int
-	live                       string
-	plan                       *schema.Plan
-	renderCache                map[string]string
-	printQueue                 []string
-	printing, quitting         bool
-	exitArmed                  time.Time
+	// committedIndex is the newest message already printed to scrollback and
+	// committedText is the text that was printed for it. Agents may flush
+	// updates after the prompt response: late text merges into that message,
+	// and tool updates can target any committed message. The transcript
+	// reprints what changed instead of leaving it invisible, remembering tool
+	// lines by message index.
+	committedIndex     int
+	committedText      string
+	committedTools     map[int]string
+	live               string
+	plan               *schema.Plan
+	renderCache        map[string]string
+	printQueue         []string
+	printing, quitting bool
+	exitArmed          time.Time
 }
 
 func Run(ctx context.Context, options Options) error {
@@ -161,7 +170,7 @@ func newModel(ctx context.Context, options Options) *model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = p.accent
-	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
+	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, committedIndex: -1, committedTools: map[int]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
 	m.rebuildAgents()
 	m.theme = p
 	return m
