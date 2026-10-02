@@ -30,6 +30,10 @@ func main() {
 	defer cancel()
 	if err := run(ctx, os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, "micro-acp:", err)
+		var exit *exitError
+		if errors.As(err, &exit) {
+			os.Exit(exit.code)
+		}
 		os.Exit(1)
 	}
 }
@@ -50,6 +54,10 @@ func run(ctx context.Context, args []string, out, errOut io.Writer) error {
 	configFile := fs.String("config", "", "configuration file")
 	offline := fs.Bool("offline", false, "use the cached registry without a network request")
 	demoMode := fs.Bool("demo", false, "try the TUI with a local demo agent; no credentials required")
+	execFormat := fs.String("format", "text", "exec output format: text, json, or stream-json")
+	execPermission := fs.String("permission", "deny", "exec reply to permission requests: allow, deny, or fail")
+	execTimeout := fs.Duration("timeout", 0, "exec deadline such as 90s; 0 means no limit")
+	execSave := fs.Bool("save", false, "exec: persist the session locally instead of running ephemeral")
 	showVersion := fs.Bool("version", false, "print version")
 	fs.Usage = func() {
 		fmt.Fprint(errOut, `micro-acp — a small terminal client for ACP agents
@@ -60,12 +68,15 @@ Usage:
   micro-acp -- /path/to/agent --acp        Run a custom stdio command
   micro-acp --session <id>                Resume a saved session
   micro-acp --demo                        Try the local demo
+  micro-acp [flags] exec <prompt>         Send one prompt without the TUI
+  micro-acp [flags] exec -                Read the prompt from stdin
   micro-acp [flags] agents                List the latest registry and custom agents
   micro-acp sessions                      List saved sessions
   micro-acp sessions forget <id>          Remove a local saved session
   micro-acp config                        Print paths and an example configuration
 
-Flags must precede subcommands. Session deletion and forks are available in the TUI.
+Flags must precede subcommands. The format, permission, timeout, and save flags
+apply to exec. Session deletion and forks are available in the TUI.
 
 `)
 		fs.PrintDefaults()
@@ -96,6 +107,32 @@ Flags must precede subcommands. Session deletion and forks are available in the 
 			custom = true
 			break
 		}
+	}
+	// For the top-level custom-command form (`micro-acp -- agent`) flag parsing
+	// consumes the "--", so it is absent from remaining. A "--" still present in
+	// remaining belongs to exec's inline command form (`micro-acp exec -- agent`).
+	inlineCommand := false
+	for _, arg := range remaining {
+		if arg == "--" {
+			inlineCommand = true
+			break
+		}
+	}
+	if !(custom && !inlineCommand) && len(remaining) > 0 && remaining[0] == "exec" {
+		return runExec(ctx, execOptions{
+			Config:     cfg,
+			Paths:      paths,
+			Store:      st,
+			Agent:      *agent,
+			Cwd:        *cwd,
+			Offline:    *offline,
+			Demo:       *demoMode,
+			Session:    *sessionID,
+			Format:     *execFormat,
+			Permission: *execPermission,
+			Timeout:    *execTimeout,
+			Save:       *execSave,
+		}, remaining[1:], out, errOut)
 	}
 	if !custom && len(remaining) > 0 {
 		switch remaining[0] {

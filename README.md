@@ -85,6 +85,30 @@ The agent picker shows each adapter's resolved version beside its name. The pick
 
 For example, run `micro-acp --agent anvil`, `micro-acp --agent muse-acp`, or `micro-acp --agent draupnir`. Draupnir downloads support Linux (glibc) and macOS on amd64 and arm64, using its universal macOS archive. Downloads are verified against GitHub's SHA-256 asset digest and installed in the private cache. npm and GitHub release metadata are checked while loading the catalog and on `/refresh`; launching uses the exact version displayed. A failed lookup falls back to validated cached metadata. `--offline` requires cached version metadata and, for native agents, a previously installed executable. Built-in entries remain visible when the official registry is unavailable. An entry with no resolvable version is shown as unavailable until `/refresh` succeeds. Matching published registry entries take precedence over built-ins, and custom agent configurations take precedence over both.
 
+## Run a single prompt
+
+`exec` sends one prompt and prints the reply without opening the TUI, so scripts, CI jobs, and tooling harnesses can drive an agent:
+
+```sh
+./bin/micro-acp --agent <registry-id> exec "summarize the failing tests"
+echo "explain this stack trace" | ./bin/micro-acp --agent <registry-id> exec -
+./bin/micro-acp --demo exec "hello"
+./bin/micro-acp exec -- /absolute/path/to/my-agent --acp   # prompt from stdin
+```
+
+Flags must precede `exec`. Run `micro-acp agents` to list valid agent ids.
+
+| Flag | Default | Purpose |
+| --- | --- | --- |
+| `--format text\|json\|stream-json` | `text` | Print the final reply, one JSON result object, or newline-delimited JSON events as the turn streams. |
+| `--permission allow\|deny\|fail` | `deny` | Answer the agent's permission requests without a prompt. |
+| `--timeout <duration>` | `0` | Overall deadline such as `90s`; `0` means no limit. |
+| `--save` | off | Persist the session locally. Runs are ephemeral by default and leave no local trace. |
+
+Resume an existing conversation with `--session <local-id>`, which persists updates. The client advertises no elicitation support during `exec`, so agents ask for form or URL input only when they ignore that and it is declined; use the TUI when a flow needs interactive input. Authentication is still interactive: an agent that requires login exits `3` with its login method ids, so authenticate in the TUI with `/auth` first.
+
+Exit codes: `0` normal, `1` error, `2` usage, `3` authentication required, `4` permission denied, `5` timeout, `6` the agent stopped for another reason.
+
 ## Custom agents
 
 `micro-acp --help` lists all launch flags. Put flags before the subcommand or
