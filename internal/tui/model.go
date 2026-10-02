@@ -370,7 +370,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 					return m, cmd
 				}
 			}
-			m.lastError = "Unknown agent: " + m.options.Agent
+			m.lastError = "Unknown agent: " + m.options.Agent + ". Run 'micro-acp agents' to list valid agent ids."
 			m.openPicker("agents", m.agents)
 		}
 		if m.picker != nil && m.picker.kind == "agents" {
