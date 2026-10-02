@@ -143,6 +143,9 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	if agentID == "" && resumed != nil {
 		agentID = resumed.Agent
 	}
+	if opts.Demo && opts.Agent != "" {
+		return withCode(exitUsage, errors.New("choose either --agent or --demo"))
+	}
 
 	var command config.Command
 	switch {
@@ -158,7 +161,6 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 			agentID = "demo"
 		}
 		command = config.Command{Command: self, Args: []string{"__demo-agent"}}
-		opts.Offline = true
 	default:
 		if agentID == "" {
 			return withCode(exitUsage, errors.New("provide --agent <id>, a command after --, or --demo"))
@@ -362,7 +364,11 @@ func execPrompt(args []string) (string, error) {
 		}
 		return text, nil
 	}
-	return strings.Join(args, " "), nil
+	text := strings.Join(args, " ")
+	if strings.TrimSpace(text) == "" {
+		return "", errors.New("prompt was empty")
+	}
+	return text, nil
 }
 
 func answerExecPermissions(ctx context.Context, c *client.Client, policy string, denied *atomic.Bool, done <-chan struct{}) {

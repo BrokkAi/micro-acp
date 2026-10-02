@@ -101,7 +101,24 @@ apply to exec. Session deletion and forks are available in the TUI.
 	}
 	st := store.Store{Directory: paths.Data}
 	remaining := fs.Args()
-	if len(remaining) > 0 && remaining[0] == "exec" {
+	custom := false
+	for _, arg := range args {
+		if arg == "--" {
+			custom = true
+			break
+		}
+	}
+	// For the top-level custom-command form (`micro-acp -- agent`) flag parsing
+	// consumes the "--", so it is absent from remaining. A "--" still present in
+	// remaining belongs to exec's inline command form (`micro-acp exec -- agent`).
+	inlineCommand := false
+	for _, arg := range remaining {
+		if arg == "--" {
+			inlineCommand = true
+			break
+		}
+	}
+	if !(custom && !inlineCommand) && len(remaining) > 0 && remaining[0] == "exec" {
 		return runExec(ctx, execOptions{
 			Config:     cfg,
 			Paths:      paths,
@@ -116,13 +133,6 @@ apply to exec. Session deletion and forks are available in the TUI.
 			Timeout:    *execTimeout,
 			Save:       *execSave,
 		}, remaining[1:], out, errOut)
-	}
-	custom := false
-	for _, arg := range args {
-		if arg == "--" {
-			custom = true
-			break
-		}
 	}
 	if !custom && len(remaining) > 0 {
 		switch remaining[0] {

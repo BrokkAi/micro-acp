@@ -15,6 +15,7 @@ func TestExecRejectsInvalidFlags(t *testing.T) {
 	for _, args := range [][]string{
 		{"--demo", "--format", "bogus", "exec", "hi"},
 		{"--demo", "--permission", "whatever", "exec", "hi"},
+		{"--demo", "--agent", "anvil", "exec", "hi"},
 	} {
 		var out bytes.Buffer
 		err := run(context.Background(), args, &out, &out)
@@ -22,6 +23,17 @@ func TestExecRejectsInvalidFlags(t *testing.T) {
 		if !errors.As(err, &exit) || exit.code != exitUsage {
 			t.Fatalf("%v: want usage exit, got %v", args, err)
 		}
+	}
+}
+
+func TestExecDoesNotCaptureTopLevelCustomCommand(t *testing.T) {
+	t.Setenv("MICRO_ACP_HOME", t.TempDir())
+	var out bytes.Buffer
+	// `micro-acp -- exec` launches a custom agent binary named exec, so it must
+	// reach the TUI path (and its terminal check) rather than the subcommand.
+	err := run(context.Background(), []string{"--", "exec"}, &out, &out)
+	if err == nil || !strings.Contains(err.Error(), "needs a terminal") {
+		t.Fatalf("-- exec should keep the custom-command meaning, got %v", err)
 	}
 }
 
