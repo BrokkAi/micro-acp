@@ -10,6 +10,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/store"
@@ -102,7 +103,9 @@ func runLogin(ctx context.Context, opts loginOptions, args []string, out, errOut
 	defer c.Close()
 	done := make(chan struct{})
 	defer close(done)
-	go declineUnattendedRequests(ctx, c, done)
+	go serveInteractions(ctx, c, done, func(schema.RequestPermissionRequest) schema.RequestPermissionOutcome {
+		return cancelledPermission()
+	})
 
 	choices := c.AuthChoices()
 	if opts.Method == "" {

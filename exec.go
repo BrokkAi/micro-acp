@@ -178,8 +178,14 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	var denied atomic.Bool
 	done := make(chan struct{})
 	defer close(done)
-	go answerExecPermissions(ctx, c, opts.Permission, &denied, done)
-	go declineUnattendedRequests(ctx, c, done)
+	go serveInteractions(ctx, c, done, func(request schema.RequestPermissionRequest) schema.RequestPermissionOutcome {
+		outcome := answerPermission(request, opts.Permission)
+		if opts.Permission == "fail" {
+			denied.Store(true)
+			_ = c.Cancel()
+		}
+		return outcome
+	})
 
 	var stream *execStreamer
 	stopStream := make(chan struct{})
@@ -276,27 +282,6 @@ func execPrompt(args []string) (string, error) {
 		return "", errors.New("prompt was empty")
 	}
 	return text, nil
-}
-
-func answerExecPermissions(ctx context.Context, c *client.Client, policy string, denied *atomic.Bool, done <-chan struct{}) {
-	for {
-		select {
-		case p := <-c.Permissions:
-			outcome := answerPermission(p.Request, policy)
-			if policy == "fail" {
-				denied.Store(true)
-				_ = c.Cancel()
-			}
-			select {
-			case p.Reply <- outcome:
-			default:
-			}
-		case <-ctx.Done():
-			return
-		case <-done:
-			return
-		}
-	}
 }
 
 func answerPermission(request schema.RequestPermissionRequest, policy string) schema.RequestPermissionOutcome {

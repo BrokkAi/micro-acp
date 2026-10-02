@@ -145,15 +145,16 @@ func authHint(c *client.Client) string {
 	return " (authentication required; run 'micro-acp --agent <id> --method <id> login' with one of: " + strings.Join(ids, ", ") + ")"
 }
 
-// declineUnattendedRequests cancels elicitation and permission requests that a
-// headless run cannot answer, so an agent cannot stall waiting for input.
-func declineUnattendedRequests(ctx context.Context, c *client.Client, done <-chan struct{}) {
+// serveInteractions answers agent requests that a headless run cannot present,
+// so an agent cannot stall waiting for input. One goroutine owns both channels:
+// elicitations are always declined, and permissions go to the caller's policy.
+func serveInteractions(ctx context.Context, c *client.Client, done <-chan struct{}, permission func(schema.RequestPermissionRequest) schema.RequestPermissionOutcome) {
 	for {
 		select {
 		case e := <-c.Elicitations:
 			reply(e.Reply, acp.CancelElicitation())
 		case p := <-c.Permissions:
-			reply(p.Reply, cancelledPermission())
+			reply(p.Reply, permission(p.Request))
 		case <-ctx.Done():
 			return
 		case <-done:
