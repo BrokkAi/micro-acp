@@ -35,6 +35,7 @@ type Client struct {
 	Agent, Cwd       string
 	Init             acp.Initialization
 	CanFork          bool
+	Ephemeral        bool // suppresses local session persistence for headless runs
 	Permissions      chan Permission
 	Elicitations     chan Elicitation
 	urlElicitations  map[schema.ElicitationId]bool
@@ -79,6 +80,9 @@ func Open(parent context.Context, agent, cwd string, command config.Command, ses
 type Interactions struct {
 	Permissions  chan Permission
 	Elicitations chan Elicitation
+	// DisableElicitation advertises no elicitation support. Headless runs use
+	// this so agents do not ask for form or URL input the caller cannot answer.
+	DisableElicitation bool
 }
 
 func OpenInteractive(parent context.Context, agent, cwd string, command config.Command, sessions store.Store, interactions Interactions, settings ...config.SessionOptions) (*Client, error) {
@@ -151,7 +155,11 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 	var raw json.RawMessage
 	caps := acp.WorkspaceCapabilities(true, true, true)
 	caps.Session = acp.ConfigOptionsClientCapabilities(true)
-	caps.Elicitation = acp.ElicitationClientCapabilities(true, true)
+	if interactions.DisableElicitation {
+		caps.Elicitation = acp.ElicitationClientCapabilities(false, false)
+	} else {
+		caps.Elicitation = acp.ElicitationClientCapabilities(true, true)
+	}
 	terminalAuth := true
 	caps.Auth = &schema.AuthCapabilities{Terminal: &terminalAuth}
 	err = c.conn.Call(setup, schema.InitializeMethodName, schema.InitializeRequest{
@@ -212,6 +220,9 @@ func (c *Client) Snapshot() (store.Session, uint64) {
 	return s, c.revision
 }
 func (c *Client) Save() error {
+	if c.Ephemeral {
+		return nil
+	}
 	s, _ := c.Snapshot()
 	if s.ID == "" || s.RemoteID == "" {
 		return nil
