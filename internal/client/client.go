@@ -140,6 +140,7 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 		cancel()
 		return nil, err
 	}
+	postStart(c.cmd)
 	_ = stdoutWriter.Close()
 	c.conn = acp.Connect(stdout, stdin, c.request, c.notification)
 	go func() { _ = c.cmd.Wait(); close(c.wait) }()

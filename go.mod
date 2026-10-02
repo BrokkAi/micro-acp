@@ -13,6 +13,7 @@ require (
 	github.com/charmbracelet/x/vt v0.0.0-20260924144451-d676b019604b
 	github.com/creack/pty v1.1.24
 	github.com/sahilm/fuzzy v0.1.3
+	golang.org/x/sys v0.47.0
 	golang.org/x/term v0.36.0
 )
 
@@ -41,6 +42,5 @@ require (
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/net v0.39.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.30.0 // indirect
 )
