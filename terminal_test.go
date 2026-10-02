@@ -4,11 +4,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,6 +19,63 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"github.com/creack/pty"
 )
+
+// lockedEmulator serializes writes with renders so assertions can read the
+// visible screen and its scrollback while the PTY reader keeps writing.
+type lockedEmulator struct {
+	*vt.Emulator
+	mu sync.RWMutex
+}
+
+func (e *lockedEmulator) Write(p []byte) (int, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.Emulator.Write(p)
+}
+
+func (e *lockedEmulator) Resize(w, h int) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.Emulator.Resize(w, h)
+}
+
+// screen is the visible viewport, where menus and the prompt live.
+func (e *lockedEmulator) screen() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return ansi.Strip(e.Emulator.Render())
+}
+
+// history adds scrollback to the visible viewport. The TUI prints transcripts
+// above the prompt, so printed output can scroll out of a short terminal.
+func (e *lockedEmulator) history() string {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	var b strings.Builder
+	if sb := e.Emulator.Scrollback(); sb != nil {
+		for _, line := range sb.Lines() {
+			b.WriteString(line.String())
+			b.WriteByte('\n')
+		}
+	}
+	b.WriteString(e.Emulator.Render())
+	return ansi.Strip(b.String())
+}
+
+func TestTerminalHistoryRetainsScrolledOutput(t *testing.T) {
+	emulator := &lockedEmulator{Emulator: vt.NewEmulator(20, 5)}
+	for i := 0; i < 20; i++ {
+		if _, err := emulator.Write([]byte(fmt.Sprintf("line %d\r\n", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if strings.Contains(emulator.screen(), "line 0") {
+		t.Fatal("first line should have scrolled off the viewport")
+	}
+	if !strings.Contains(emulator.history(), "line 0") {
+		t.Fatal("history dropped output that scrolled off the screen")
+	}
+}
 
 // Exercise the real binary and renderer, not only Model.View: terminal cursor
 // movement bugs can leave stale menus even when the next View is correct.
@@ -50,7 +109,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	emulator := vt.NewSafeEmulator(100, 30)
+	emulator := &lockedEmulator{Emulator: vt.NewEmulator(100, 30)}
 	readDone, replyDone := make(chan struct{}), make(chan struct{})
 	stopReplies := make(chan struct{})
 	go func() { defer close(readDone); _, _ = io.Copy(emulator, terminal) }()
@@ -83,7 +142,8 @@ func TestTerminalWorkflow(t *testing.T) {
 		<-replyDone
 		_ = emulator.Close()
 	})
-	screen := func() string { return ansi.Strip(emulator.Render()) }
+	screen := emulator.screen
+	history := emulator.history
 	wait := func(label string, condition func(string) bool) {
 		t.Helper()
 		deadline := time.Now().Add(12 * time.Second)
@@ -207,8 +267,11 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("/sessions\r")
 	contains("Resume a session")
 	send("Review\r")
-	wait("session loaded", func(s string) bool {
-		return strings.Contains(s, "This is the local demo agent") && !strings.Contains(s, "Resume a session")
+	// The resumed transcript is taller than the viewport, so its earlier
+	// messages can scroll into history before the next poll sees them.
+	wait("session loaded", func(string) bool {
+		return strings.Contains(history(), "This is the local demo agent") &&
+			!strings.Contains(screen(), "Resume a session")
 	})
 	send("/fork --context\r")
 	waitSessions(3)
