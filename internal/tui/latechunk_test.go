@@ -16,18 +16,22 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-// lateChunkAgent streams the start of a message, answers the prompt, and only
-// then flushes the rest of the text. A real adapter can race its final writes
-// against the prompt response the same way.
-type lateChunkAgent struct{}
+// lateTestAgent supplies the mandatory ACP surface; each probe only overrides
+// the prompt behavior.
+type lateTestAgent struct{}
 
-func (lateChunkAgent) Initialize(context.Context, agent.Client, schema.InitializeRequest) (schema.InitializeResponse, error) {
+func (lateTestAgent) Initialize(context.Context, agent.Client, schema.InitializeRequest) (schema.InitializeResponse, error) {
 	return schema.InitializeResponse{ProtocolVersion: acp.Version, AgentInfo: &schema.Implementation{Name: "late chunk agent", Version: "1.0.0"}}, nil
 }
 
-func (lateChunkAgent) NewSession(context.Context, agent.Client, schema.NewSessionRequest) (schema.NewSessionResponse, error) {
-	return schema.NewSessionResponse{SessionID: "late-chunk-session"}, nil
+func (lateTestAgent) NewSession(context.Context, agent.Client, schema.NewSessionRequest) (schema.NewSessionResponse, error) {
+	return schema.NewSessionResponse{SessionID: "late-session"}, nil
 }
+
+// lateChunkAgent streams the start of a message, answers the prompt, and only
+// then flushes the rest of the text. A real adapter can race its final writes
+// against the prompt response the same way.
+type lateChunkAgent struct{ lateTestAgent }
 
 func (lateChunkAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
 	first := schema.ContentChunk{Content: acp.NewTextContent("first half\n\n")}
@@ -42,18 +46,9 @@ func (lateChunkAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptR
 	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 }
 
-func TestLateChunkAgentProcess(t *testing.T) {
-	if os.Getenv("MICRO_ACP_LATE_CHUNK_AGENT") != "1" {
-		return
-	}
-	if err := agent.New(lateChunkAgent{}).Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // lateToolAgent finishes its turn with a tool call still in progress and
 // reports the completion afterwards.
-type lateToolAgent struct{ lateChunkAgent }
+type lateToolAgent struct{ lateTestAgent }
 
 func (lateToolAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
 	inProgress := schema.ToolCallStatusInProgress
@@ -69,22 +64,72 @@ func (lateToolAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRe
 	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 }
 
-func TestLateToolAgentProcess(t *testing.T) {
-	if os.Getenv("MICRO_ACP_LATE_TOOL_AGENT") != "1" {
+// lateKindAgent changes only the kind of a committed tool call, which the
+// compact transcript line does not show.
+type lateKindAgent struct{ lateTestAgent }
+
+func (lateKindAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
+	inProgress := schema.ToolCallStatusInProgress
+	tool := schema.ToolCall{ToolCallID: "tool-1", Title: "Run tests", Status: &inProgress}
+	if err := updates.Update(schema.SessionUpdate{ToolCall: &tool}); err != nil {
+		return schema.PromptResponse{}, err
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		kind := schema.ToolKindExecute
+		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewToolCallChangedUpdate(r.SessionID, schema.ToolCallUpdate{ToolCallID: "tool-1", Kind: &kind}))
+	}()
+	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
+}
+
+// lateOlderToolAgent ends the turn with text after an in-progress tool call and
+// completes that older tool afterwards.
+type lateOlderToolAgent struct{ lateTestAgent }
+
+func (lateOlderToolAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
+	inProgress := schema.ToolCallStatusInProgress
+	tool := schema.ToolCall{ToolCallID: "tool-1", Title: "Run tests", Status: &inProgress}
+	if err := updates.Update(schema.SessionUpdate{ToolCall: &tool}); err != nil {
+		return schema.PromptResponse{}, err
+	}
+	text := schema.ContentChunk{Content: acp.NewTextContent("waiting on the suite\n\n")}
+	if err := updates.Update(schema.SessionUpdate{AgentMessageChunk: &text}); err != nil {
+		return schema.PromptResponse{}, err
+	}
+	go func() {
+		time.Sleep(200 * time.Millisecond)
+		completed := schema.ToolCallStatusCompleted
+		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewToolCallChangedUpdate(r.SessionID, schema.ToolCallUpdate{ToolCallID: "tool-1", Status: &completed}))
+	}()
+	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
+}
+
+func TestLateAgentProcess(t *testing.T) {
+	var implementation agent.Agent
+	switch os.Getenv("MICRO_ACP_LATE_AGENT") {
+	case "chunk":
+		implementation = lateChunkAgent{}
+	case "tool":
+		implementation = lateToolAgent{}
+	case "kind":
+		implementation = lateKindAgent{}
+	case "older":
+		implementation = lateOlderToolAgent{}
+	default:
 		return
 	}
-	if err := agent.New(lateToolAgent{}).Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
+	if err := agent.New(implementation).Serve(context.Background(), os.Stdin, os.Stdout); err != nil {
 		t.Fatal(err)
 	}
 }
 
-func openLateAgentClient(t *testing.T, processTest, envKey string) *client.Client {
+func openLateAgentClient(t *testing.T, mode string) *client.Client {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
 	c, err := client.Open(ctx, "late", t.TempDir(), config.Command{
-		Command: os.Args[0], Args: []string{"-test.run=^" + processTest + "$"},
-		Env: map[string]string{envKey: "1"},
+		Command: os.Args[0], Args: []string{"-test.run=^TestLateAgentProcess$"},
+		Env: map[string]string{"MICRO_ACP_LATE_AGENT": mode},
 	}, store.Store{Directory: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -126,11 +171,11 @@ func waitForSnapshot(t *testing.T, c *client.Client, want string) {
 }
 
 func TestLateChunkAfterPromptResponseIsPrinted(t *testing.T) {
-	if os.Getenv("MICRO_ACP_LATE_CHUNK_AGENT") != "" {
+	if os.Getenv("MICRO_ACP_LATE_AGENT") != "" {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "TestLateChunkAgentProcess", "MICRO_ACP_LATE_CHUNK_AGENT")
+	c := openLateAgentClient(t, "chunk")
 	m.client = c
 	finishTurn(t, m, c)
 	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -156,11 +201,11 @@ func TestLateChunkAfterPromptResponseIsPrinted(t *testing.T) {
 }
 
 func TestLateToolUpdateAfterPromptResponseIsReprinted(t *testing.T) {
-	if os.Getenv("MICRO_ACP_LATE_TOOL_AGENT") != "" {
+	if os.Getenv("MICRO_ACP_LATE_AGENT") != "" {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "TestLateToolAgentProcess", "MICRO_ACP_LATE_TOOL_AGENT")
+	c := openLateAgentClient(t, "tool")
 	m.client = c
 	finishTurn(t, m, c)
 	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -174,6 +219,53 @@ func TestLateToolUpdateAfterPromptResponseIsReprinted(t *testing.T) {
 	late := ansi.Strip(strings.Join(m.printQueue, "\n"))
 	if !strings.Contains(late, "✓ Run tests") {
 		t.Fatalf("late tool update stayed invisible in the transcript:\n%s", late)
+	}
+	m.printQueue = nil
+	m.syncTranscript()
+	if len(m.printQueue) != 0 {
+		t.Fatalf("repeated sync duplicated output: %q", m.printQueue)
+	}
+}
+
+func TestLateKindOnlyToolUpdateIsIgnored(t *testing.T) {
+	if os.Getenv("MICRO_ACP_LATE_AGENT") != "" {
+		t.Skip("agent process mode")
+	}
+	m := composer(t)
+	c := openLateAgentClient(t, "kind")
+	m.client = c
+	finishTurn(t, m, c)
+	if first := ansi.Strip(strings.Join(m.printQueue, "\n")); !strings.Contains(first, "◦ Run tests") {
+		t.Fatalf("tool call was not committed:\n%s", first)
+	}
+	m.printQueue = nil
+
+	waitForSnapshot(t, c, "execute")
+	m.syncTranscript()
+	if late := ansi.Strip(strings.Join(m.printQueue, "\n")); late != "" {
+		t.Fatalf("kind-only update reprinted an unchanged line: %q", late)
+	}
+}
+
+func TestLateOlderToolUpdateIsReprinted(t *testing.T) {
+	if os.Getenv("MICRO_ACP_LATE_AGENT") != "" {
+		t.Skip("agent process mode")
+	}
+	m := composer(t)
+	c := openLateAgentClient(t, "older")
+	m.client = c
+	finishTurn(t, m, c)
+	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
+	if !strings.Contains(first, "◦ Run tests") || !strings.Contains(first, "waiting on the suite") {
+		t.Fatalf("turn was not committed:\n%s", first)
+	}
+	m.printQueue = nil
+
+	waitForSnapshot(t, c, "Run tests · completed")
+	m.syncTranscript()
+	late := ansi.Strip(strings.Join(m.printQueue, "\n"))
+	if !strings.Contains(late, "✓ Run tests") {
+		t.Fatalf("completion of an older tool call stayed invisible:\n%s", late)
 	}
 	m.printQueue = nil
 	m.syncTranscript()

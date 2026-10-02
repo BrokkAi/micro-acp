@@ -122,6 +122,7 @@ func (m *model) syncTranscript() {
 		m.live = ""
 		m.plan = nil
 		m.committedIndex, m.committedText = -1, ""
+		m.committedTools = map[int]string{}
 		return
 	}
 	m.plan = s.Plan
@@ -134,6 +135,7 @@ func (m *model) syncTranscript() {
 		m.printedIndex = inherited
 		m.streamPrefix = 0
 		m.committedIndex, m.committedText = -1, ""
+		m.committedTools = map[int]string{}
 		label := m.client.Agent + " · " + s.Title
 		if s.ParentID != "" {
 			label += " · fork"
@@ -179,6 +181,9 @@ func (m *model) syncTranscript() {
 				m.queueOutput(m.messageView(message, false, m.streamPrefix > 0))
 			}
 			m.committedIndex, m.committedText = i, committed
+			if message.Role == "tool" {
+				m.committedTools[i] = toolSignature(message)
+			}
 			m.printedIndex++
 			m.streamPrefix = 0
 			continue
@@ -193,24 +198,34 @@ func (m *model) syncTranscript() {
 		}
 		break
 	}
-	// Late updates can land in the newest message after it was committed: an
-	// agent may flush them once the prompt response is already on the wire.
-	// Scrollback cannot be edited, so reprint what changed instead of leaving
-	// the transcript stale.
+	// Late updates can land after a message was committed, once the prompt
+	// response is already on the wire. Scrollback cannot be edited, so reprint
+	// what changed instead of leaving the transcript stale. Late text merges
+	// into the newest message; late tool updates are addressed by ID and can
+	// target any committed message.
 	if m.committedIndex >= 0 && m.committedIndex == len(s.Messages)-1 {
 		message := s.Messages[m.committedIndex]
 		textRole := message.Role == "assistant" || message.Role == "thought"
-		switch {
-		case textRole && message.Text != m.committedText && strings.HasPrefix(message.Text, m.committedText):
+		if textRole && message.Text != m.committedText && strings.HasPrefix(message.Text, m.committedText) {
 			delta := message
 			delta.Text = message.Text[len(m.committedText):]
 			// Keep the assistant bullet when nothing was committed yet.
 			m.queueOutput(m.messageView(delta, false, m.committedText != ""))
 			m.committedText = message.Text
-		case message.Role == "tool" && message.Text != m.committedText:
-			// Tool summaries change in place: title, status and diff rows.
+		}
+	}
+	for i := 0; i < m.printedIndex && i < len(s.Messages); i++ {
+		message := s.Messages[i]
+		if message.Role != "tool" {
+			continue
+		}
+		committed, ok := m.committedTools[i]
+		if !ok {
+			continue
+		}
+		if current := toolSignature(message); current != committed {
 			m.queueOutput(m.messageView(message, false, false))
-			m.committedText = message.Text
+			m.committedTools[i] = current
 		}
 	}
 	var live []string
