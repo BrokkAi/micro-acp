@@ -2,8 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,35 +17,9 @@ import (
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
-	"github.com/BrokkAi/micro-acp/internal/registry"
 	"github.com/BrokkAi/micro-acp/internal/store"
 	"golang.org/x/term"
 )
-
-// Scripted exit codes. Zero means the agent finished normally.
-const (
-	exitUsage      = 2
-	exitAuth       = 3
-	exitPermission = 4
-	exitTimeout    = 5
-	exitStop       = 6
-)
-
-// exitError carries a process exit code for scripted callers.
-type exitError struct {
-	code int
-	err  error
-}
-
-func (e *exitError) Error() string { return e.err.Error() }
-func (e *exitError) Unwrap() error { return e.err }
-
-func withCode(code int, err error) error {
-	if err == nil {
-		return nil
-	}
-	return &exitError{code: code, err: err}
-}
 
 // stdin is a variable so tests can supply a prompt without a terminal.
 var stdin io.Reader = os.Stdin
@@ -89,24 +61,14 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 		return withCode(exitUsage, fmt.Errorf("unknown --permission %q (want allow, deny, or fail)", opts.Permission))
 	}
 
-	var custom *config.Command
-	promptArgs := args
-	if len(args) > 0 && args[0] == "--" {
-		if len(args) == 1 {
-			return withCode(exitUsage, errors.New("provide an agent command after --"))
-		}
+	custom, promptArgs, err := customCommand(args)
+	if err != nil {
+		return withCode(exitUsage, err)
+	}
+	if custom != nil {
 		if opts.Agent != "" || opts.Demo {
 			return withCode(exitUsage, errors.New("choose either --agent, --demo, or a custom command after --"))
 		}
-		command := config.Command{Command: args[1], Args: args[2:]}
-		if filepath.IsAbs(command.Command) || strings.ContainsRune(command.Command, os.PathSeparator) {
-			abs, err := filepath.Abs(command.Command)
-			if err != nil {
-				return withCode(exitUsage, err)
-			}
-			command.Command = abs
-		}
-		custom = &command
 		// An inline command has no unambiguous place for a positional prompt.
 		promptArgs = nil
 	}
@@ -127,7 +89,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
-	cwd, err := filepath.Abs(cwd)
+	cwd, err = filepath.Abs(cwd)
 	if err != nil {
 		return withCode(exitUsage, err)
 	}
@@ -165,7 +127,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 		if agentID == "" {
 			return withCode(exitUsage, errors.New("provide --agent <id>, a command after --, or --demo"))
 		}
-		resolved, err := resolveExecAgent(ctx, opts, agentID, errOut)
+		resolved, err := resolveAgentCommand(ctx, opts.Config, opts.Paths, agentID, opts.Offline, errOut)
 		if err != nil {
 			return err
 		}
@@ -194,7 +156,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	c, err := client.OpenInteractive(ctx, agentID, cwd, command, opts.Store,
 		client.Interactions{DisableElicitation: true}, opts.Config.Session)
 	if err != nil {
-		return execClientError(nil, err)
+		return clientError(nil, err)
 	}
 	defer c.Close()
 	c.Ephemeral = ephemeral
@@ -205,7 +167,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 		err = c.New()
 	}
 	if err != nil {
-		return execClientError(c, err)
+		return clientError(c, err)
 	}
 
 	// Resuming replays saved history into the snapshot. Only messages produced
@@ -216,8 +178,14 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	var denied atomic.Bool
 	done := make(chan struct{})
 	defer close(done)
-	go answerExecPermissions(ctx, c, opts.Permission, &denied, done)
-	go cancelExecElicitations(ctx, c, done)
+	go serveInteractions(ctx, c, done, func(request schema.RequestPermissionRequest) schema.RequestPermissionOutcome {
+		outcome := answerPermission(request, opts.Permission)
+		if opts.Permission == "fail" {
+			denied.Store(true)
+			_ = c.Cancel()
+		}
+		return outcome
+	})
 
 	var stream *execStreamer
 	stopStream := make(chan struct{})
@@ -294,61 +262,6 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	return nil
 }
 
-// resolveExecAgent turns an agent id into a launch command, preferring custom
-// configuration over the registry and its built-ins.
-func resolveExecAgent(ctx context.Context, opts execOptions, id string, errOut io.Writer) (config.Command, error) {
-	if command, ok := opts.Config.Agents[id]; ok {
-		return command, nil
-	}
-	r := registry.Client{URL: opts.Config.RegistryURL, Cache: opts.Paths.Cache}
-	snapshot, loadErr := r.Load(ctx, opts.Offline)
-	if snapshot.Warning != "" {
-		fmt.Fprintln(errOut, snapshot.Warning)
-	}
-	for _, a := range registry.WithBuiltins(snapshot.Index.Agents) {
-		if a.ID != id {
-			continue
-		}
-		command, err := r.Resolve(ctx, a, opts.Offline)
-		if err != nil {
-			return config.Command{}, withCode(exitUsage, fmt.Errorf("resolve agent %s: %w", id, err))
-		}
-		return command, nil
-	}
-	if loadErr != nil {
-		return config.Command{}, withCode(exitUsage, fmt.Errorf("unknown agent %q (registry unavailable: %v); run 'micro-acp agents' to list valid agent ids", id, loadErr))
-	}
-	return config.Command{}, withCode(exitUsage, fmt.Errorf("unknown agent %q; run 'micro-acp agents' to list valid agent ids", id))
-}
-
-func execClientError(c *client.Client, err error) error {
-	if err == nil {
-		return nil
-	}
-	if acp.IsAuthRequired(err) {
-		return withCode(exitAuth, fmt.Errorf("%w%s", err, authHint(c)))
-	}
-	var exit *exitError
-	if errors.As(err, &exit) {
-		return err
-	}
-	return err
-}
-
-func authHint(c *client.Client) string {
-	if c == nil {
-		return ""
-	}
-	var ids []string
-	for _, choice := range c.AuthChoices() {
-		ids = append(ids, choice.ID)
-	}
-	if len(ids) == 0 {
-		return " (authentication required; the agent offers no login methods, so configure its credentials and retry)"
-	}
-	return " (authentication required; login methods: " + strings.Join(ids, ", ") + ")"
-}
-
 func execPrompt(args []string) (string, error) {
 	if len(args) == 0 || (len(args) == 1 && args[0] == "-") {
 		if len(args) == 0 && term.IsTerminal(int(os.Stdin.Fd())) {
@@ -371,47 +284,8 @@ func execPrompt(args []string) (string, error) {
 	return text, nil
 }
 
-func answerExecPermissions(ctx context.Context, c *client.Client, policy string, denied *atomic.Bool, done <-chan struct{}) {
-	for {
-		select {
-		case p := <-c.Permissions:
-			outcome := answerPermission(p.Request, policy)
-			if policy == "fail" {
-				denied.Store(true)
-				_ = c.Cancel()
-			}
-			select {
-			case p.Reply <- outcome:
-			default:
-			}
-		case <-ctx.Done():
-			return
-		case <-done:
-			return
-		}
-	}
-}
-
-// cancelExecElicitations answers any elicitation that arrives even though the
-// client advertised no support, so a confused agent cannot stall the run.
-func cancelExecElicitations(ctx context.Context, c *client.Client, done <-chan struct{}) {
-	for {
-		select {
-		case e := <-c.Elicitations:
-			select {
-			case e.Reply <- acp.CancelElicitation():
-			default:
-			}
-		case <-ctx.Done():
-			return
-		case <-done:
-			return
-		}
-	}
-}
-
 func answerPermission(request schema.RequestPermissionRequest, policy string) schema.RequestPermissionOutcome {
-	cancelled := schema.RequestPermissionOutcome{Cancelled: &schema.RequestPermissionOutcomeCancelled{}}
+	cancelled := cancelledPermission()
 	selectOption := func(kinds ...schema.PermissionOptionKind) schema.RequestPermissionOutcome {
 		for _, kind := range kinds {
 			for _, option := range request.Options {
@@ -440,12 +314,6 @@ func assistantText(messages []store.Message) string {
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func customAgentID(command config.Command) string {
-	encoded, _ := json.Marshal(command)
-	hash := sha256.Sum256(encoded)
-	return "custom-" + hex.EncodeToString(hash[:4])
 }
 
 // execStreamer turns the client's accumulating session snapshot into
