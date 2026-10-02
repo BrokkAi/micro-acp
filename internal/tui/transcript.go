@@ -121,6 +121,7 @@ func (m *model) syncTranscript() {
 	if s.ID == "" || s.RemoteID == "" {
 		m.live = ""
 		m.plan = nil
+		m.committedIndex, m.committedText = -1, ""
 		return
 	}
 	m.plan = s.Plan
@@ -132,6 +133,7 @@ func (m *model) syncTranscript() {
 		m.printedSession = s.ID
 		m.printedIndex = inherited
 		m.streamPrefix = 0
+		m.committedIndex, m.committedText = -1, ""
 		label := m.client.Agent + " · " + s.Title
 		if s.ParentID != "" {
 			label += " · fork"
@@ -168,6 +170,7 @@ func (m *model) syncTranscript() {
 		if message.Role == "notice" {
 			final = true
 		}
+		committed := message.Text
 		if message.Role == "assistant" && m.streamPrefix <= len(message.Text) {
 			message.Text = message.Text[m.streamPrefix:]
 		}
@@ -175,6 +178,7 @@ func (m *model) syncTranscript() {
 			if message.Text != "" {
 				m.queueOutput(m.messageView(message, false, m.streamPrefix > 0))
 			}
+			m.committedIndex, m.committedText = i, committed
 			m.printedIndex++
 			m.streamPrefix = 0
 			continue
@@ -188,6 +192,26 @@ func (m *model) syncTranscript() {
 			}
 		}
 		break
+	}
+	// Late updates can land in the newest message after it was committed: an
+	// agent may flush them once the prompt response is already on the wire.
+	// Scrollback cannot be edited, so reprint what changed instead of leaving
+	// the transcript stale.
+	if m.committedIndex >= 0 && m.committedIndex == len(s.Messages)-1 {
+		message := s.Messages[m.committedIndex]
+		textRole := message.Role == "assistant" || message.Role == "thought"
+		switch {
+		case textRole && message.Text != m.committedText && strings.HasPrefix(message.Text, m.committedText):
+			delta := message
+			delta.Text = message.Text[len(m.committedText):]
+			// Keep the assistant bullet when nothing was committed yet.
+			m.queueOutput(m.messageView(delta, false, m.committedText != ""))
+			m.committedText = message.Text
+		case message.Role == "tool" && message.Text != m.committedText:
+			// Tool summaries change in place: title, status and diff rows.
+			m.queueOutput(m.messageView(message, false, false))
+			m.committedText = message.Text
+		}
 	}
 	var live []string
 	for i := m.printedIndex; i < len(s.Messages); i++ {
