@@ -25,31 +25,17 @@ func (c *Client) elicit(ctx context.Context, raw json.RawMessage) (any, error) {
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, &acp.RPCError{Code: -32602, Message: err.Error()}
 	}
-	// acp-go v0.10's mode unions retain scope but omit the mode payload.
-	// Decode only those omitted fields here, keeping schema and responses typed.
-	var payload struct {
-		Schema       *schema.ElicitationSchema `json:"requestedSchema"`
-		LegacySchema *schema.ElicitationSchema `json:"schema"`
-		URL          string                    `json:"url"`
-		ID           schema.ElicitationId      `json:"elicitationId"`
-	}
-	if err := json.Unmarshal(raw, &payload); err != nil {
-		return nil, &acp.RPCError{Code: -32602, Message: err.Error()}
-	}
-	if payload.Schema == nil {
-		payload.Schema = payload.LegacySchema
-	}
+	e := Elicitation{Agent: c.Agent, Request: request, Reply: make(chan schema.CreateElicitationResponse, 1)}
 	var session *schema.ElicitationSessionScope
 	switch {
 	case request.Form != nil:
 		session = request.Form.Session
-		if payload.Schema == nil {
-			return nil, &acp.RPCError{Code: -32602, Message: "form has no requestedSchema"}
-		}
+		e.Schema = &request.Form.RequestedSchema
 	case request.URL != nil:
 		session = request.URL.Session
-		u, err := url.Parse(payload.URL)
-		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || payload.ID == "" {
+		e.URL, e.ID = request.URL.URL, request.URL.ElicitationID
+		u, err := url.Parse(e.URL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil || e.ID == "" {
 			return nil, &acp.RPCError{Code: -32602, Message: "invalid elicitation URL or ID"}
 		}
 	default:
@@ -68,24 +54,24 @@ func (c *Client) elicit(ctx context.Context, raw json.RawMessage) (any, error) {
 		stop := context.AfterFunc(turn, cancel)
 		defer stop()
 	}
-	if payload.ID != "" {
+	if e.ID != "" {
 		c.mu.Lock()
-		if c.urlElicitations[payload.ID] {
+		if c.urlElicitations[e.ID] {
 			c.mu.Unlock()
 			return nil, &acp.RPCError{Code: -32602, Message: "duplicate elicitation ID"}
 		}
-		c.urlElicitations[payload.ID] = true
+		c.urlElicitations[e.ID] = true
 		c.mu.Unlock()
 	}
 	accepted := false
 	defer func() {
-		if !accepted && payload.ID != "" {
+		if !accepted && e.ID != "" {
 			c.mu.Lock()
-			delete(c.urlElicitations, payload.ID)
+			delete(c.urlElicitations, e.ID)
 			c.mu.Unlock()
 		}
 	}()
-	e := Elicitation{Agent: c.Agent, Request: request, Schema: payload.Schema, URL: payload.URL, ID: payload.ID, Reply: make(chan schema.CreateElicitationResponse, 1), Done: requestCtx.Done()}
+	e.Done = requestCtx.Done()
 	select {
 	case c.Elicitations <- e:
 	case <-requestCtx.Done():

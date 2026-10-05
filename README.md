@@ -313,7 +313,7 @@ Under `MICRO_ACP_HOME`, the paths are `config.json`, `data/sessions/`, and
 then overrides only the configuration file. Demo history lives under `demo/`
 in the state directory (`data/demo/` with `MICRO_ACP_HOME`).
 
-The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). Native forks additionally use the SDK's opt-in unstable v1 schema. Steering uses the advertised `_session/steering` extension. Draft ACP v2 and editor-specific experimental capabilities are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
+The client targets stable **ACP v1** using `BrokkAi/acp-go`, pinned to v0.12.1. Native forks additionally use the SDK's opt-in unstable v1 schema. Steering uses the advertised `_session/steering` extension. Draft ACP v2 and editor-specific experimental capabilities are not advertised. The [support matrix](docs/acp-support.md) maps protocol methods to UI flows and tests.
 
 ## Development
 

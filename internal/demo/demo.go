@@ -139,9 +139,12 @@ func (a *Agent) Prompt(ctx context.Context, c agent.Client, r schema.PromptReque
 		answer += "\n\nTry `/settings`, `/new`, `/sessions`, `/fork --context`, or `/delete`. Send `permission` for an approval dialog, `form` for structured input, or `slow` to test cancellation."
 	}
 	if strings.EqualFold(text, "form") {
-		var response schema.CreateElicitationResponse
-		params := map[string]any{"sessionId": r.SessionID, "mode": "form", "message": "Choose how this local demo should respond.", "requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"name": map[string]any{"type": "string", "title": "Your name", "default": "Ada", "minLength": 1}, "style": map[string]any{"type": "string", "title": "Greeting", "enum": []string{"hello", "welcome"}, "default": "hello"}}, "required": []string{"name", "style"}}}
-		if err := c.Call(ctx, schema.ElicitationCreateMethodName, params, &response); err != nil {
+		form := schema.ElicitationSchema{Type: new(schema.ElicitationSchemaTypeObject), Required: []string{"name", "style"}, Properties: map[string]schema.ElicitationPropertySchema{
+			"name":  {String: &schema.StringPropertySchema{Title: new("Your name"), Default: new("Ada"), MinLength: new(uint32(1))}},
+			"style": {String: &schema.StringPropertySchema{Title: new("Greeting"), Enum: []string{"hello", "welcome"}, Default: new("hello")}},
+		}}
+		response, err := c.CreateElicitation(ctx, schema.CreateElicitationRequest{Message: "Choose how this local demo should respond.", Form: &schema.ElicitationFormMode{RequestedSchema: form, Session: &schema.ElicitationSessionScope{SessionID: r.SessionID}}})
+		if err != nil {
 			return schema.PromptResponse{}, err
 		}
 		answer = "Input request dismissed."
