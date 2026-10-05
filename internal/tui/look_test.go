@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"image/color"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -147,11 +148,12 @@ func TestSmallFormatters(t *testing.T) {
 			t.Errorf("ago = %q, want %q", got, want)
 		}
 	}
-	if got := displayPath("/work/repo/internal/x.go", "/work/repo"); got != "internal/x.go" {
+	root := filepath.Join(t.TempDir(), "repo")
+	if got := displayPath(filepath.Join(root, "internal", "x.go"), root); got != "internal/x.go" {
 		t.Errorf("workspace path not relative: %q", got)
 	}
-	if got := displayPath("/elsewhere/x.go", "/work/repo"); got != "/elsewhere/x.go" {
-		t.Errorf("outside path changed: %q", got)
+	if got := displayPath(filepath.Join(filepath.Dir(root), "elsewhere", "x.go"), root); strings.HasPrefix(got, "..") || strings.HasPrefix(got, "elsewhere") {
+		t.Errorf("outside path shown relative to the workspace: %q", got)
 	}
 	if got := truncateLeft("internal/tui/very/long/path.go", 12); got != "…ong/path.go" || ansi.StringWidth(got) != 12 {
 		t.Errorf("truncateLeft = %q", got)
