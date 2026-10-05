@@ -1,4 +1,4 @@
-//go:build linux || darwin
+//go:build linux || darwin || windows
 
 package main
 
@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -17,7 +18,6 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/store"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/charmbracelet/x/vt"
-	"github.com/creack/pty"
 )
 
 // lockedEmulator serializes writes with renders so assertions can read the
@@ -79,13 +79,17 @@ func TestTerminalHistoryRetainsScrolledOutput(t *testing.T) {
 
 // Exercise the real binary and renderer, not only Model.View: terminal cursor
 // movement bugs can leave stale menus even when the next View is correct.
+// Unix runs it in a pty; Windows runs it in a ConPTY pseudo console.
 func TestTerminalWorkflow(t *testing.T) {
 	if testing.Short() {
 		t.Skip("subprocess terminal integration")
 	}
 	root := t.TempDir()
 	binary := filepath.Join(root, "micro-acp")
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	build := exec.CommandContext(ctx, "go", "build", "-race", "-o", binary, ".")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -103,9 +107,9 @@ func TestTerminalWorkflow(t *testing.T) {
 	if out, err := exec.Command("git", "init", "-q", workspace).CombinedOutput(); err != nil {
 		t.Fatalf("git: %v %s", err, out)
 	}
-	command := exec.CommandContext(ctx, binary, "--demo", "--cwd", workspace)
-	command.Env = append(os.Environ(), "TERM=xterm-256color", "MICRO_ACP_HOME="+root)
-	terminal, err := pty.StartWithSize(command, &pty.Winsize{Rows: 30, Cols: 100})
+	t.Setenv("TERM", "xterm-256color")
+	t.Setenv("MICRO_ACP_HOME", root)
+	terminal, err := startPTY(ctx, []string{binary, "--demo", "--cwd", workspace}, 100, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,9 +134,9 @@ func TestTerminalWorkflow(t *testing.T) {
 		}
 	}()
 	processDone := make(chan error, 1)
-	go func() { processDone <- command.Wait() }()
+	go func() { processDone <- terminal.Wait() }()
 	t.Cleanup(func() {
-		_ = command.Process.Kill()
+		terminal.Kill()
 		_ = terminal.Close()
 		<-readDone
 		// x/vt's Close must not race its blocking Read. A status query wakes
@@ -291,7 +295,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("/new\r")
 	waitSessions(3)
 
-	if err := pty.Setsize(terminal, &pty.Winsize{Rows: 14, Cols: 35}); err != nil {
+	if err := terminal.Resize(35, 14); err != nil {
 		t.Fatal(err)
 	}
 	emulator.Resize(35, 14)

@@ -323,7 +323,7 @@ make test       # Race detector, including real ACP subprocess integration tests
 make vet
 ```
 
-Tests require no external agents, model accounts, or internet access once Go dependencies are downloaded. Registry tests use loopback HTTP/TLS servers. `TestTerminalWorkflow` builds the actual binary and drives it through a PTY and a Go terminal emulator, covering inline completion, shrinking menus, file attachments, permission/form dialogs, cancellation, queues, session creation/loading/forking/deletion, resizing, and exit. CI runs on Linux and macOS. `go test -short ./...` skips the PTY test.
+Tests require no external agents, model accounts, or internet access once Go dependencies are downloaded. Registry tests use loopback HTTP/TLS servers. `TestTerminalWorkflow` builds the actual binary and drives it through a PTY (ConPTY on Windows) and a Go terminal emulator, covering inline completion, shrinking menus, file attachments, permission/form dialogs, cancellation, queues, session creation/loading/forking/deletion, resizing, and exit. CI runs on Linux, macOS, and Windows. `go test -short ./...` skips the PTY test.
 
 See the [screenshot capture notes](docs/screenshots/README.md) to recreate the
 README's terminal screens.
