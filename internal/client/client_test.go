@@ -237,6 +237,27 @@ func TestPermissionsCancellationAndNextTurn(t *testing.T) {
 	}
 }
 
+func TestDemoFormElicitation(t *testing.T) {
+	c := openTest(t, "demo", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+	require(t, c.New())
+	done := make(chan error, 1)
+	go func() { _, err := c.Prompt("form"); done <- err }()
+	select {
+	case e := <-c.Elicitations:
+		if e.Schema == nil || e.Schema.Properties["name"].String == nil || *e.Schema.Properties["name"].String.Default != "Ada" || len(e.Schema.Required) != 2 {
+			t.Fatalf("form schema lost on the wire: %+v", e.Schema)
+		}
+		e.Reply <- acp.AcceptElicitation(map[string]schema.ElicitationContentValue{"name": "Grace", "style": "welcome"})
+	case <-time.After(5 * time.Second):
+		t.Fatal("form request did not arrive")
+	}
+	require(t, <-done)
+	s, _ := c.Snapshot()
+	if text := s.Messages[len(s.Messages)-1].Text; !strings.Contains(text, "welcome, **Grace**") {
+		t.Fatalf("form answers not used: %q", text)
+	}
+}
+
 func TestCancelWhileWaitingForPermission(t *testing.T) {
 	c := openTest(t, "demo", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
 	require(t, c.New())
