@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -187,8 +188,13 @@ func serveRichAgent() {
 				if err := conn.Call(ctx, "fs/read_text_file", schema.ReadTextFileRequest{SessionID: p.SessionID, Path: filepath.Join(setup.Cwd, "..", "outside.txt")}, &read); err == nil {
 					return nil, fmt.Errorf("workspace escape permitted")
 				}
+				// Windows has no sh unless Git for Windows puts one on PATH.
+				command, args := "sh", []string{"-c", "printf live-output"}
+				if runtime.GOOS == "windows" {
+					command, args = "cmd", []string{"/c", "echo live-output"}
+				}
 				var terminal schema.CreateTerminalResponse
-				if err := conn.Call(ctx, "terminal/create", map[string]any{"sessionId": p.SessionID, "command": "sh", "args": []string{"-c", "printf live-output"}, "cwd": setup.AdditionalDirectories[0]}, &terminal); err != nil {
+				if err := conn.Call(ctx, "terminal/create", map[string]any{"sessionId": p.SessionID, "command": command, "args": args, "cwd": setup.AdditionalDirectories[0]}, &terminal); err != nil {
 					return nil, err
 				}
 				params := map[string]any{"sessionId": p.SessionID, "terminalId": terminal.TerminalID}
@@ -199,7 +205,8 @@ func serveRichAgent() {
 				if err := conn.Call(ctx, "terminal/output", params, &output); err != nil {
 					return nil, err
 				}
-				if output.Output != "live-output" {
+				// cmd's echo ends the line with CRLF; printf adds nothing.
+				if strings.TrimRight(output.Output, "\r\n") != "live-output" {
 					return nil, fmt.Errorf("missing terminal output")
 				}
 				if err := conn.Call(ctx, "terminal/kill", params, nil); err != nil {
