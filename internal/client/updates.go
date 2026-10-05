@@ -26,6 +26,12 @@ func (c *Client) request(ctx context.Context, method string, raw json.RawMessage
 	if err != nil {
 		return nil, err
 	}
+	return schema.RequestPermissionResponse{Outcome: c.askPermission(ctx, request, subagent)}, nil
+}
+
+// askPermission shows a permission request and waits for the answer. It is
+// cancelled when the request or the current turn ends.
+func (c *Client) askPermission(ctx context.Context, request schema.RequestPermissionRequest, subagent string) schema.RequestPermissionOutcome {
 	c.mu.Lock()
 	permissionCtx := c.permissionCtx
 	c.mu.Unlock()
@@ -38,21 +44,17 @@ func (c *Client) request(ctx context.Context, method string, raw json.RawMessage
 	defer cancel()
 	permissionCtx = requestCtx
 	p := Permission{Request: request, Subagent: subagent, Reply: make(chan schema.RequestPermissionOutcome, 1), Done: permissionCtx.Done()}
-	cancelled := schema.RequestPermissionResponse{Outcome: schema.RequestPermissionOutcome{Cancelled: &schema.RequestPermissionOutcomeCancelled{}}}
+	cancelled := schema.RequestPermissionOutcome{Cancelled: &schema.RequestPermissionOutcomeCancelled{}}
 	select {
 	case c.Permissions <- p:
-	case <-ctx.Done():
-		return cancelled, nil
 	case <-permissionCtx.Done():
-		return cancelled, nil
+		return cancelled
 	}
 	select {
 	case outcome := <-p.Reply:
-		return schema.RequestPermissionResponse{Outcome: outcome}, nil
-	case <-ctx.Done():
-		return cancelled, nil
+		return outcome
 	case <-permissionCtx.Done():
-		return cancelled, nil
+		return cancelled
 	}
 }
 

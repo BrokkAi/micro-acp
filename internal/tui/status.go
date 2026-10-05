@@ -31,6 +31,14 @@ func (m *model) statusValue(field client.StatusField, width int) string {
 		}
 	case "cost":
 		style = m.theme.muted
+	case "turn":
+		style = m.theme.muted
+		switch text {
+		case "running":
+			style = m.theme.accent
+		case "waiting on you":
+			style = m.theme.amber.Bold(true)
+		}
 	}
 	if field.Boolean {
 		text, style = "○ "+field.Name, m.theme.muted

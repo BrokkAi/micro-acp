@@ -136,18 +136,27 @@ func (c *Client) SetConfig(id, value string) error {
 		c.mu.Unlock()
 		return nil
 	}
-	request := schema.SetSessionConfigOptionRequest{SessionID: w.SessionID, ConfigID: schema.SessionConfigId(id)}
-	if selected.Boolean {
-		request.Boolean = &schema.SetSessionConfigOptionRequestBoolean{Value: value == "true"}
+	var options []schema.SessionConfigOption
+	if c.v2 != nil {
+		var err error
+		if options, err = c.setConfigV2(ctx, w.SessionID, id, value, selected.Boolean); err != nil {
+			return err
+		}
 	} else {
-		request.ValueID = &schema.SetSessionConfigOptionRequestValueID{Value: schema.SessionConfigValueId(value)}
-	}
-	var response schema.SetSessionConfigOptionResponse
-	if err := c.conn.Call(ctx, schema.SessionSetConfigOptionMethodName, request, &response); err != nil {
-		return err
+		request := schema.SetSessionConfigOptionRequest{SessionID: w.SessionID, ConfigID: schema.SessionConfigId(id)}
+		if selected.Boolean {
+			request.Boolean = &schema.SetSessionConfigOptionRequestBoolean{Value: value == "true"}
+		} else {
+			request.ValueID = &schema.SetSessionConfigOptionRequestValueID{Value: schema.SessionConfigValueId(value)}
+		}
+		var response schema.SetSessionConfigOptionResponse
+		if err := c.conn.Call(ctx, schema.SessionSetConfigOptionMethodName, request, &response); err != nil {
+			return err
+		}
+		options = response.ConfigOptions
 	}
 	c.mu.Lock()
-	c.wire.ConfigOptions = response.ConfigOptions
+	c.wire.ConfigOptions = options
 	c.revision++
 	c.mu.Unlock()
 	for _, s := range c.Selectors() {
@@ -168,6 +177,17 @@ type StatusField struct {
 // use compact, semantic styling without parsing display strings.
 func (c *Client) StatusFields() []StatusField {
 	var values []StatusField
+	// v2 agents report their turn state; v1 has none.
+	switch c.TurnState() {
+	case TurnRunning:
+		values = append(values, StatusField{Name: "Turn", Value: "running", Category: "turn"})
+	case TurnRequiresAction:
+		values = append(values, StatusField{Name: "Turn", Value: "waiting on you", Category: "turn"})
+	case TurnIdle:
+		values = append(values, StatusField{Name: "Turn", Value: "idle", Category: "turn"})
+	case TurnUnknown:
+		values = append(values, StatusField{Name: "Turn", Value: "state unknown", Category: "turn"})
+	}
 	selectors := c.Selectors()
 	rank := func(s Selector) int {
 		switch s.Category {

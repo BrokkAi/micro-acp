@@ -13,6 +13,7 @@ import (
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/clienthost"
 	"github.com/BrokkAi/acp-go/schema"
+	schema2 "github.com/BrokkAi/acp-go/schema/v2"
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
 
@@ -237,11 +238,17 @@ func (c *Client) CloseSession() error {
 	}
 	ctx, cancel := c.operation()
 	defer cancel()
-	if err := c.conn.CloseSession(ctx, c.Init, w.SessionID); err != nil {
+	var err error
+	if c.v2 != nil {
+		err = c.v2.conn.CloseSession(ctx, c.v2.init, schema2.SessionId(w.SessionID))
+	} else {
+		err = c.conn.CloseSession(ctx, c.Init, w.SessionID)
+	}
+	if err != nil {
 		return err
 	}
 	c.releaseTerminals()
-	err := c.Save()
+	err = c.Save()
 	c.set(store.Session{}, acp.Session{})
 	return err
 }
@@ -253,11 +260,17 @@ func (c *Client) Logout() error {
 	}
 	ctx, cancel := c.operation()
 	defer cancel()
-	if err := c.conn.Logout(ctx, c.Init); err != nil {
+	var err error
+	if c.v2 != nil {
+		err = c.v2.conn.AuthLogout(ctx, c.v2.init)
+	} else {
+		err = c.conn.Logout(ctx, c.Init)
+	}
+	if err != nil {
 		return err
 	}
 	c.releaseTerminals()
-	err := c.Save()
+	err = c.Save()
 	c.set(store.Session{}, acp.Session{})
 	return err
 }

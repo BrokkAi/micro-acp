@@ -9,7 +9,6 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -20,7 +19,7 @@ import (
 	"github.com/BrokkAi/acp-go/clienthost"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/acp-go/schema/unstable"
-	"github.com/BrokkAi/micro-acp/internal/buildinfo"
+	schema2 "github.com/BrokkAi/acp-go/schema/v2"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
@@ -55,8 +54,11 @@ type Client struct {
 	terminalHosts    map[string]terminalOwner
 	terminalSequence uint64
 	options          acp.NewSessionOptions
-	cmd              *exec.Cmd
-	wait             chan struct{}
+	process          *agentProcess
+	// routed closes when the client router stops; nil without the router.
+	routed chan struct{}
+	// v2 is set when the agent accepted the ACP v2 draft.
+	v2               *v2State
 	closeOnce        sync.Once
 	shutdownOnce     sync.Once
 	shutdownErr      error
@@ -93,7 +95,7 @@ type Interactions struct {
 
 func OpenInteractive(parent context.Context, agent, cwd string, command config.Command, sessions store.Store, interactions Interactions, settings ...config.SessionOptions) (*Client, error) {
 	ctx, cancel := context.WithCancel(parent)
-	c := &Client{Agent: agent, Cwd: cwd, store: sessions, ctx: ctx, cancel: cancel, Permissions: make(chan Permission, 32), wait: make(chan struct{})}
+	c := &Client{Agent: agent, Cwd: cwd, store: sessions, ctx: ctx, cancel: cancel, Permissions: make(chan Permission, 32)}
 	c.command = command
 	c.Elicitations = make(chan Elicitation, 32)
 	if interactions.Permissions != nil {
@@ -120,87 +122,30 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 			c.options.AdditionalDirectories = append(c.options.AdditionalDirectories, filepath.Clean(root))
 		}
 	}
-	c.cmd = exec.CommandContext(ctx, command.Command, command.Args...)
-	c.cmd.Dir = cwd
-	c.cmd.Env = os.Environ()
-	for key, value := range command.Env {
-		c.cmd.Env = append(c.cmd.Env, key+"="+value)
-	}
-	configureProcess(c.cmd)
-	c.cmd.Stderr = &c.stderr
-	stdin, err := c.cmd.StdinPipe()
-	if err != nil {
-		host.Close()
-		cancel()
-		return nil, err
-	}
-	stdout, stdoutWriter, err := os.Pipe()
-	if err != nil {
-		stdin.Close()
-		host.Close()
-		cancel()
-		return nil, err
-	}
-	c.cmd.Stdout = stdoutWriter
-	if err := c.cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
-		stdoutWriter.Close()
-		host.Close()
-		cancel()
-		return nil, err
-	}
-	postStart(c.cmd)
-	_ = stdoutWriter.Close()
-	c.conn = acp.Connect(stdout, stdin, c.request, c.notification)
-	go func() { _ = c.cmd.Wait(); close(c.wait) }()
 	go func() { <-ctx.Done(); c.Close() }()
 	setup, stop := context.WithTimeout(ctx, 45*time.Second)
 	defer stop()
-	// Keep the raw handshake to inspect the opt-in fork capability, which the stable
-	// facade intentionally omits. Both representations come from acp-go's schemas.
-	var raw json.RawMessage
-	caps := acp.WorkspaceCapabilities(true, true, true)
-	caps.Session = acp.ConfigOptionsClientCapabilities(true)
-	if interactions.DisableElicitation {
-		caps.Elicitation = acp.ElicitationClientCapabilities(false, false)
+	if command.Protocol == config.ProtocolV2 {
+		_, err = c.connectRouted(setup, interactions)
 	} else {
-		caps.Elicitation = acp.ElicitationClientCapabilities(true, true)
-	}
-	terminalAuth := true
-	caps.Auth = &schema.AuthCapabilities{Terminal: &terminalAuth}
-	// Subagent sessions are unstable, so the stable capability type omits them.
-	var extendedCaps unstable.ClientCapabilities
-	b, _ := json.Marshal(caps)
-	_ = json.Unmarshal(b, &extendedCaps)
-	extendedCaps.Subagents = &unstable.SubagentCapabilities{}
-	err = c.conn.Call(setup, schema.InitializeMethodName, unstable.InitializeRequest{
-		ProtocolVersion: unstable.ProtocolVersion(acp.Version), ClientCapabilities: &extendedCaps,
-		ClientInfo: &unstable.Implementation{Name: "micro-acp", Version: buildinfo.Version},
-	}, &raw)
-	if err == nil {
-		err = json.Unmarshal(raw, &c.Init)
-	}
-	if err == nil && c.Init.ProtocolVersion != acp.Version {
-		err = fmt.Errorf("agent selected unsupported ACP version %d", c.Init.ProtocolVersion)
+		var process *agentProcess
+		process, err = c.startAgent()
+		if err != nil {
+			c.Close()
+			return nil, err
+		}
+		c.mu.Lock()
+		c.conn = acp.Connect(process.out, process.in, c.request, c.notification)
+		c.mu.Unlock()
+		var raw json.RawMessage
+		raw, err = initializeV1(setup, c.conn, clientCapabilities(interactions))
+		if err == nil {
+			err = c.useV1Initialization(raw)
+		}
 	}
 	if err != nil {
 		c.Close()
 		return nil, fmt.Errorf("initialize %s: %w%s", agent, err, c.Diagnostics())
-	}
-	var extended unstable.InitializeResponse
-	if json.Unmarshal(raw, &extended) == nil && extended.AgentCapabilities != nil && extended.AgentCapabilities.SessionCapabilities != nil {
-		c.CanFork = extended.AgentCapabilities.SessionCapabilities.Fork != nil
-	}
-	var subagents struct {
-		AgentCapabilities struct {
-			SessionCapabilities struct {
-				Subagents json.RawMessage `json:"subagents"`
-			} `json:"sessionCapabilities"`
-		} `json:"agentCapabilities"`
-	}
-	if json.Unmarshal(raw, &subagents) == nil {
-		c.Subagents = hasJSONValue(subagents.AgentCapabilities.SessionCapabilities.Subagents)
 	}
 	return c, nil
 }
@@ -208,8 +153,15 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 func (c *Client) Close() {
 	c.closeOnce.Do(func() {
 		c.cancel()
-		killProcess(c.cmd)
-		_ = c.conn.Close()
+		c.mu.Lock()
+		process, conn := c.process, c.conn
+		c.mu.Unlock()
+		if process != nil {
+			killProcess(process.cmd)
+		}
+		if conn != nil {
+			_ = conn.Close()
+		}
 		c.host.Close()
 		c.mu.Lock()
 		hosts := make([]*clienthost.Host, 0, len(c.hosts))
@@ -222,7 +174,12 @@ func (c *Client) Close() {
 		for _, host := range hosts {
 			host.Close()
 		}
-		<-c.wait
+		if process != nil {
+			<-process.done
+		}
+		if c.routed != nil {
+			<-c.routed
+		}
 	})
 }
 
@@ -313,13 +270,23 @@ func (c *Client) New() error {
 	next := store.NewSession(c.Agent, "", c.Cwd)
 	next.AdditionalDirectories = append([]string(nil), c.options.AdditionalDirectories...)
 	c.set(next, acp.Session{})
-	w, err := c.conn.NewSessionWithOptions(ctx, c.Init, c.Cwd, c.options)
+	var w acp.Session
+	var commands []schema.AvailableCommand
+	var err error
+	if c.v2 != nil {
+		w, commands, err = c.newV2(ctx, c.options.AdditionalDirectories)
+	} else {
+		w, err = c.conn.NewSessionWithOptions(ctx, c.Init, c.Cwd, c.options)
+	}
 	if err != nil {
 		c.set(previous, previousWire)
 		return err
 	}
 	s, _ := c.Snapshot()
 	s.RemoteID = string(w.SessionID)
+	if commands != nil {
+		s.Commands = commands
+	}
 	c.set(s, w)
 	return c.Save()
 }
@@ -349,7 +316,13 @@ func (c *Client) Load(s store.Session) error {
 	if len(s.Messages) == 0 && c.Init.AgentCapabilities != nil && c.Init.AgentCapabilities.LoadSession != nil && *c.Init.AgentCapabilities.LoadSession {
 		resume = false
 	}
-	if !resume {
+	replay := !resume
+	if c.v2 != nil {
+		// v2 always resumes, and replays from the start only to rebuild a
+		// transcript this client does not have.
+		replay = len(s.Messages) == 0
+	}
+	if replay {
 		s.Messages = nil
 		s.Subagents = nil
 	} else {
@@ -361,12 +334,16 @@ func (c *Client) Load(s store.Session) error {
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.replaying = false; c.mu.Unlock() }()
 	var err error
-	if resume {
+	var commands []schema.AvailableCommand
+	switch {
+	case c.v2 != nil:
+		w, commands, err = c.resumeV2(ctx, w.SessionID, s.AdditionalDirectories, replay)
+	case resume:
 		var response schema.ResumeSessionResponse
 		response, err = c.conn.ResumeSession(ctx, c.Init, schema.ResumeSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: c.mcpServers(), AdditionalDirectories: s.AdditionalDirectories})
 		w.Modes = response.Modes
 		w.ConfigOptions = response.ConfigOptions
-	} else {
+	default:
 		var response schema.LoadSessionResponse
 		response, err = c.conn.LoadSession(ctx, c.Init, schema.LoadSessionRequest{SessionID: w.SessionID, Cwd: c.Cwd, MCPServers: c.mcpServers(), AdditionalDirectories: s.AdditionalDirectories})
 		w.Modes = response.Modes
@@ -381,6 +358,9 @@ func (c *Client) Load(s store.Session) error {
 		s.Messages = backup.Messages
 		s.Subagents = backup.Subagents
 		s.Subagents = staleSubagents(s.Subagents)
+	}
+	if commands != nil {
+		s.Commands = commands
 	}
 	s.UpdatedAt = time.Now().UTC()
 	c.set(s, w)
@@ -436,10 +416,16 @@ func (c *Client) Fork(contextOnly bool) error {
 	}
 	c.set(s, acp.Session{})
 	var w acp.Session
+	var commands []schema.AvailableCommand
 	var err error
-	if contextOnly {
+	switch {
+	case c.v2 != nil && contextOnly:
+		w, commands, err = c.newV2(ctx, parent.AdditionalDirectories)
+	case c.v2 != nil:
+		w, commands, err = c.forkV2(ctx, parent.RemoteID, parent.AdditionalDirectories)
+	case contextOnly:
 		w, err = c.conn.NewSessionWithOptions(ctx, c.Init, c.Cwd, acp.NewSessionOptions{MCPServers: c.mcpServers(), AdditionalDirectories: parent.AdditionalDirectories})
-	} else {
+	default:
 		var raw json.RawMessage
 		var servers []unstable.McpServer
 		b, _ := json.Marshal(c.mcpServers())
@@ -463,6 +449,9 @@ func (c *Client) Fork(contextOnly bool) error {
 		inherited := parent.Clone()
 		s.Messages, s.Subagents = inherited.Messages, inherited.Subagents
 		s.Subagents = staleSubagents(s.Subagents)
+	}
+	if commands != nil {
+		s.Commands = commands
 	}
 	s.RemoteID = string(w.SessionID)
 	c.set(s, w)
@@ -509,7 +498,13 @@ func (c *Client) Sessions() ([]store.Session, error) {
 	var cursor *string
 	cursors := map[string]bool{}
 	for page := 0; page < 100; page++ {
-		response, err := c.conn.ListSessions(ctx, c.Init, schema.ListSessionsRequest{Cwd: &c.Cwd, Cursor: cursor})
+		var response schema.ListSessionsResponse
+		var err error
+		if c.v2 != nil {
+			response, err = c.listV2(ctx, cursor)
+		} else {
+			response, err = c.conn.ListSessions(ctx, c.Init, schema.ListSessionsRequest{Cwd: &c.Cwd, Cursor: cursor})
+		}
 		if err != nil {
 			return sessions, err
 		}
@@ -556,7 +551,13 @@ func (c *Client) Delete(s store.Session, localOnly bool) error {
 	if !localOnly {
 		ctx, cancel := c.operation()
 		defer cancel()
-		if err := c.conn.DeleteSession(ctx, c.Init, schema.SessionId(s.RemoteID)); err != nil {
+		var err error
+		if c.v2 != nil {
+			err = c.v2.conn.DeleteSession(ctx, c.v2.init, schema2.SessionId(s.RemoteID))
+		} else {
+			err = c.conn.DeleteSession(ctx, c.Init, schema.SessionId(s.RemoteID))
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -634,7 +635,11 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	if s.PendingContext != "" {
 		blocks = append([]acp.Content{acp.NewTextContent(s.PendingContext)}, blocks...)
 	}
-	reason, err = c.conn.PromptContent(ctx, c.Init, c.session(), blocks)
+	if c.v2 != nil {
+		reason, err = c.promptV2(ctx, blocks)
+	} else {
+		reason, err = c.conn.PromptContent(ctx, c.Init, c.session(), blocks)
+	}
 	if steerErr := c.finishSteering(ctx); steerErr != nil {
 		err = errors.Join(err, steerErr)
 	}
@@ -671,7 +676,10 @@ func (c *Client) Cancel() error {
 	id := c.wire.SessionID
 	c.mu.Unlock()
 	if done == nil {
-		return nil
+		return c.cancelAgentTurn(id)
+	}
+	if c.v2 != nil {
+		c.v2.permissions.CancelPermissionRequests(schema2.SessionId(id))
 	}
 	if stopPermissions != nil {
 		stopPermissions()
@@ -697,6 +705,9 @@ func (c *Client) Authenticate(method string) error {
 	defer c.op.Unlock()
 	ctx, cancel := context.WithTimeout(c.ctx, 3*time.Minute)
 	defer cancel()
+	if c.v2 != nil {
+		return c.v2.conn.AuthLogin(ctx, c.v2.init, method)
+	}
 	return c.conn.Authenticate(ctx, c.Init, method)
 }
 func (c *Client) Details() string {
@@ -704,10 +715,11 @@ func (c *Client) Details() string {
 	info := struct {
 		Agent        *schema.Implementation    `json:"agent"`
 		Capabilities *schema.AgentCapabilities `json:"capabilities"`
+		Protocol     int                       `json:"protocol"`
 		NativeFork   bool                      `json:"native_fork"`
 		Auth         []schema.AuthMethod       `json:"authentication"`
 		Session      acp.Session               `json:"session"`
-	}{c.Init.AgentInfo, c.Init.AgentCapabilities, c.CanFork, c.Init.AuthMethods, w}
+	}{c.Init.AgentInfo, c.Init.AgentCapabilities, c.Protocol(), c.CanFork, c.Init.AuthMethods, w}
 	b, _ := json.MarshalIndent(info, "", "  ")
 	return string(b)
 }

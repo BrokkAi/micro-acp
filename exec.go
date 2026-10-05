@@ -183,7 +183,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	// saved. Everything else runs ephemeral and leaves no local trace.
 	ephemeral := !opts.Save && opts.Session == ""
 
-	c, err := client.OpenInteractive(ctx, agentID, cwd, command, opts.Store,
+	c, err := client.OpenInteractive(ctx, agentID, cwd, opts.Config.Launch(command), opts.Store,
 		client.Interactions{DisableElicitation: true}, opts.Config.Session)
 	if err != nil {
 		return clientError(nil, err)
