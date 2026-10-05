@@ -1,6 +1,6 @@
 # ACP support
 
-Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to commit `5b2c77c673e0` (v0.10.0 plus the cancellation transport fix). All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
+Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go`, pinned to v0.12.1. All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
 
 ## Methods
 
@@ -52,7 +52,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 
 Prompts can carry text, resource links, images, audio, embedded text resources and embedded binary resources. Capability checks happen before sending. Full content blocks persist in local session files. The TUI renders text/resources and labels images, audio and binary data; it does not render bitmap images or play audio. Tool content supports text/resources, diffs and terminal references. `TestRichContentRoundTripAndPersistence` verifies these survive the actual stdio transport and disk storage.
 
-Form fields support the restricted flat schema: strings, integers, numbers, booleans, string enums, titled choices and multiple choices, with defaults and constraints. A raw overlay preserves `requestedSchema`, `url` and `elicitationId`, which v0.10.0's generated mode payloads omit. Transport, schema validation types and response unions still come from `acp-go`. See [ACP elicitation](https://agentclientprotocol.com/protocol/v1/elicitation).
+Form fields support the restricted flat schema: strings, integers, numbers, booleans, string enums, titled choices and multiple choices, with defaults and constraints. Requests, schemas and responses use `acp-go`'s generated types. See [ACP elicitation](https://agentclientprotocol.com/protocol/v1/elicitation).
 
 ## Extensions and boundaries
 
@@ -69,7 +69,7 @@ Run `make test` for the race-enabled suite and `make vet` for static checks. Tes
 
 ## Coverage review: 2026-09-26
 
-The latest stable upstream release checked was [schema-v1.23.0](https://github.com/agentclientprotocol/agent-client-protocol/releases/tag/schema-v1.23.0). Its downloaded `meta.json` exactly matches the pinned SDK's stable method registry: 13 agent methods, 11 client methods and one protocol notification. The implementation paths above cover all 25, and all 11 stable [session update variants](https://agentclientprotocol.com/protocol/v1/prompt-turn#session-updates) have handlers. This review identified no missing stable method family. Negotiated capabilities still determine which optional methods a connected agent supports.
+The latest stable upstream release checked was [schema-v1.24.1](https://github.com/agentclientprotocol/agent-client-protocol/releases/tag/schema-v1.24.1). Its downloaded `meta.json` exactly matches the pinned SDK's stable method registry: 13 agent methods, 11 client methods and one protocol notification. The implementation paths above cover all 25, and all 11 stable [session update variants](https://agentclientprotocol.com/protocol/v1/prompt-turn#session-updates) have handlers. This review identified no missing stable method family. Negotiated capabilities still determine which optional methods a connected agent supports.
 
 Behavioral checks include complete [plan replacement](https://agentclientprotocol.com/protocol/v1/agent-plan#updating-plans), explicit [stop reasons and cancellation](https://agentclientprotocol.com/protocol/v1/prompt-turn), and preservation of previous tool input/output when a [partial update supplies null](https://agentclientprotocol.com/protocol/v1/tool-calls). The support matrix describes their presentation and regression coverage. Method coverage and fixture tests do not establish interoperability with every agent or exhaustive conformance for every payload.
 
