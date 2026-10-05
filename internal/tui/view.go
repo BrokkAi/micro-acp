@@ -38,49 +38,91 @@ func (m *model) cropLines(s string, height int, tail bool) string {
 		return strings.Join(lines, "\n")
 	}
 	if tail {
-		return m.theme.muted.Render(line("  … Ctrl+O for full output", max(10, m.width-4))) + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
+		hidden := len(lines) - max(1, height-1)
+		return m.theme.dim.Render(line(fmt.Sprintf("  … %d earlier lines · ctrl+o details", hidden), max(10, m.lineWidth()))) + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
 	}
-	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.muted.Render("… /logs for details")
+	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.dim.Render("  … /logs for details")
 }
+
+// listWindow returns the visible slice of a list that keeps index in view.
+func listWindow(total, index, limit int) (start, end int) {
+	start = max(0, index-limit/2)
+	start = min(start, max(0, total-limit))
+	return start, min(total, start+limit)
+}
+
+// counter is shown in a panel's title rule when its list scrolls.
+func counter(index, total, limit int) string {
+	if total <= limit || total == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", index+1, total)
+}
+
+// suggestionRows renders a list with a pointer column and an aligned
+// description column. The focused row is highlighted across its full width;
+// arrows in the pointer column show that more entries are out of view.
 func (m *model) suggestionRows(entries []item, index, width, limit int, commands bool) string {
 	if len(entries) == 0 {
-		return m.theme.muted.Render("  No matches")
+		return m.theme.dim.Render("  No matches")
 	}
-	start := max(0, index-limit/2)
-	start = min(start, max(0, len(entries)-limit))
-	end := min(len(entries), start+limit)
+	start, end := listWindow(len(entries), index, limit)
+	name := func(e item) string {
+		if commands {
+			return e.id
+		}
+		return e.title
+	}
+	version := func(e item) string {
+		if e.version == "" {
+			return ""
+		}
+		return " (" + clean(e.version) + ")"
+	}
+	described := false
+	labelWidth := 0
+	for i := start; i < end; i++ {
+		labelWidth = max(labelWidth, ansi.StringWidth(clean(name(entries[i])+version(entries[i]))))
+		described = described || entries[i].description != ""
+	}
+	twoColumns := described && width > 42
+	labelWidth = min(labelWidth, max(12, width*2/5))
 	var rows []string
-	labelWidth := min(24, max(12, width/3))
 	for i := start; i < end; i++ {
 		e := entries[i]
-		label := e.title
-		if commands {
-			label = e.id
+		selected := i == index
+		limit := width - gutter
+		if twoColumns {
+			limit = labelWidth
 		}
-		description := e.description
-		prefix := "  "
-		style := plain
-		if i == index {
-			prefix = "› "
-			style = m.theme.selection
+		// Keep the version visible; it distinguishes otherwise equal names.
+		suffix := version(e)
+		text := line(line(name(e), max(1, limit-ansi.StringWidth(suffix)))+suffix, limit)
+		pointer := "  "
+		switch {
+		case selected:
+			pointer = "› "
+		case i == start && start > 0:
+			pointer = "↑ "
+		case i == end-1 && end < len(entries):
+			pointer = "↓ "
 		}
-		labelLimit := width - 2
-		if description != "" && width > 42 {
-			labelLimit = labelWidth
+		description := ""
+		if twoColumns && e.description != "" {
+			description = line(e.description, max(1, width-gutter-labelWidth-2))
 		}
-		if e.version != "" {
-			version := " (" + clean(e.version) + ")"
-			label = line(label, labelLimit-ansi.StringWidth(version)) + version
+		gap := ""
+		if description != "" {
+			gap = strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(text)+2))
 		}
-		label = line(label, labelLimit)
-		row := style.Render(prefix + label)
-		if description != "" && width > 42 {
-			row += strings.Repeat(" ", max(1, labelWidth-ansi.StringWidth(label)+2)) + m.theme.muted.Render(line(description, max(1, width-labelWidth-4)))
+		if selected {
+			bg := on(m.theme.selectBg)
+			used := gutter + ansi.StringWidth(text) + ansi.StringWidth(gap) + ansi.StringWidth(description)
+			row := m.theme.selection.Render(pointer+text) + bg.Render(gap) + m.hintKey().Inherit(bg).Render(description)
+			rows = append(rows, row+bg.Render(strings.Repeat(" ", max(0, width-used))))
+			continue
 		}
-		rows = append(rows, row)
-	}
-	if len(entries) > limit {
-		rows = append(rows, m.theme.muted.Render(fmt.Sprintf("  %d/%d", index+1, len(entries))))
+		rows = append(rows, m.theme.dim.Render(pointer)+text+gap+m.theme.muted.Render(description))
 	}
 	return strings.Join(rows, "\n")
 }
@@ -89,7 +131,7 @@ func (m *model) completionView(height int) string {
 	if c == nil {
 		return ""
 	}
-	w := max(10, m.width-4)
+	w := m.lineWidth()
 	label := "Commands"
 	if c.kind == "files" {
 		label = "Files"
@@ -100,66 +142,182 @@ func (m *model) completionView(height int) string {
 	if c.title != "" {
 		label = c.title
 	}
-	body := m.theme.muted.Render(line(label, w)) + "\n"
+	limit := min(6, max(1, height-2))
+	body := ""
+	right := ""
 	if c.kind == "files" && m.filesLoading {
-		body += m.theme.muted.Render("  Finding workspace files…")
+		body = m.theme.dim.Render("  Finding workspace files…")
 	} else if c.kind == "files" && m.filesError != "" {
-		body += m.theme.danger.Render(line(m.filesError, w))
+		body = m.theme.danger.Render(line("  "+m.filesError, w))
 	} else {
-		body += m.suggestionRows(c.entries, c.index, w, min(5, max(1, height-3)), c.kind == "commands")
+		body = m.suggestionRows(c.entries, c.index, w, limit, c.kind == "commands")
+		right = counter(c.index, len(c.entries), limit)
 	}
-	return body + "\n" + m.theme.muted.Render(line("↑↓ navigate · Tab complete · Enter select · Esc dismiss", w))
+	return m.titleRule(label, right, w, m.theme.muted) + "\n" + body + "\n" + m.hints(w, "↑↓", "navigate", "tab", "complete", "enter", "select", "esc", "dismiss")
 }
 func (m *model) pickerView(height int) string {
 	p := m.picker
-	w := max(10, m.width-4)
+	w := m.lineWidth()
 	title := p.title
 	if p.kind == "agents" && m.catalogLoading {
 		title += " · updating registry"
 	}
-	result := m.theme.accent.Bold(true).Render(line(title, w)) + "\n" + p.input.View() + "\n" + m.suggestionRows(p.matches, p.index, w, min(5, max(1, height-4)), p.kind == "commands")
-	hint := "↑↓ navigate · Enter select · Esc back"
-	if p.kind == "sessions" {
-		hint += " · Ctrl+D delete"
+	limit := min(8, max(1, height-3))
+	result := m.titleRule(title, counter(p.index, len(p.matches), limit), w, m.theme.accent.Bold(true)) + "\n" + p.input.View() + "\n" + m.suggestionRows(p.matches, p.index, w, limit, p.kind == "commands")
+	verbs := map[string]string{"agents": "connect", "sessions": "resume", "settings": "change", "choices": "choose", "commands": "run", "queue": "edit", "subagents": "open", "auth": "sign in"}
+	verb := verbs[p.kind]
+	if verb == "" {
+		verb = "select"
 	}
-	if p.kind == "queue" {
-		hint = "Enter edit · Ctrl+D remove · Esc back"
+	hints := []string{"↑↓", "navigate", "enter", verb, "esc", "close"}
+	switch p.kind {
+	case "sessions":
+		hints = append(hints[:4], "ctrl+d", "delete", "esc", "close")
+	case "queue":
+		hints = append(hints[:4], "ctrl+d", "remove", "esc", "close")
 	}
-	if p.kind == "subagents" {
-		hint = "↑↓ navigate · Enter open transcript · Esc back"
-	}
-	return result + "\n" + m.theme.muted.Render(line(hint, w))
+	return result + "\n" + m.hints(w, hints...)
 }
 func (m *model) permissionView(height int) string {
 	p := m.permission
-	w := max(10, m.width-4)
+	w := m.lineWidth()
 	title := "Allow this action?"
-	if p.Request.ToolCall.Title != nil {
+	if p.Request.ToolCall.Title != nil && strings.TrimSpace(*p.Request.ToolCall.Title) != "" {
 		title = *p.Request.ToolCall.Title
 	}
+	heading := "Permission required"
 	if p.Subagent != "" {
-		title = subagentMark + " " + p.Subagent + " · " + title
+		heading += " · " + subagentMark + " " + p.Subagent
 	}
+	meta := ""
+	if n := len(m.permissionQueue); n > 0 {
+		meta = fmt.Sprintf("%d more waiting", n)
+	} else if p.Request.ToolCall.Kind != nil {
+		meta = string(*p.Request.ToolCall.Kind)
+	}
+	// The request itself may wrap onto a second line; it is what is being approved.
+	titleLines := strings.Split(ansi.Wrap(clean(title), w-gutter, ""), "\n")
+	if len(titleLines) > 2 {
+		titleLines = append(titleLines[:1], line(strings.Join(titleLines[1:], " "), w-gutter))
+	}
+	// Show what would run or change the way the details page does: input
+	// fields, output, and diffs with line numbers.
 	tool := schema.ToolCall{ToolCallID: p.Request.ToolCall.ToolCallID, Content: p.Request.ToolCall.Content, RawInput: p.Request.ToolCall.RawInput, Locations: p.Request.ToolCall.Locations}
-	details := ansi.Hardwrap(clean(client.ToolText(tool)), w, true)
+	details := strings.TrimRight(m.toolDetails(tool, w), "\n ")
 	var choices []item
 	for _, o := range p.Request.Options {
 		choices = append(choices, item{title: o.Name})
 	}
-	choices = append(choices, item{title: "Cancel"})
+	choices = append(choices, item{title: "Cancel", description: "esc"})
 	options := m.suggestionRows(choices, m.permissionChoice, w, min(len(choices), max(1, height-5)), false)
-	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(details)), 6, max(1, height-lipgloss.Height(options)-2))))
-	v.SetContent(details)
-	v.SetYOffset(m.interactionOffset)
-	body := m.theme.accent.Bold(true).Render(line(title, w)) + "\n" + v.View() + "\n"
-	body += options + "\n" + m.theme.muted.Render(line("↑↓ choose · Enter confirm · Esc cancel · PgUp/PgDn details", w))
-	return body
+	body := m.titleRule(heading, meta, w, m.theme.amber.Bold(true)) + "\n" + hang("  ", m.hintKey().Bold(true).Render(strings.Join(titleLines, "\n"))) + "\n"
+	reserved := 2 + len(titleLines) + lipgloss.Height(options)
+	if strings.TrimSpace(details) != "" {
+		v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(details)), 8, max(1, height-reserved-1))))
+		v.SetContent(details)
+		v.SetYOffset(m.interactionOffset)
+		body += v.View() + "\n"
+		reserved += v.Height()
+	}
+	if height > reserved {
+		body += "\n"
+	}
+	return body + options + "\n" + m.hints(w, "↑↓", "choose", "enter", "confirm", "esc", "cancel", "pgup/pgdn", "details")
 }
+
+// statusLine shows the turn in progress: what the agent is doing, how long
+// it has taken, and how to stop it.
+func (m *model) statusLine(w int) string {
+	since := time.Since(m.startedAt)
+	label := m.status
+	if label == "Working" && m.activity != "" {
+		label = m.activity
+	}
+	waiting := m.client != nil && m.client.TurnState() == client.TurnRequiresAction
+	if waiting {
+		label = "Waiting on you"
+	}
+	if n := m.runningSubagents(); n == 1 {
+		label += " · 1 subagent running"
+	} else if n > 1 {
+		label += fmt.Sprintf(" · %d subagents running", n)
+	}
+	trailer := " (" + elapsed(since) + " · esc to interrupt)"
+	label = line(label, max(1, w-gutter-ansi.StringWidth(trailer)))
+	text := m.shimmer(label, since)
+	mark := m.spinner.View()
+	if waiting {
+		text, mark = m.theme.amber.Render(label), m.theme.amber.Render("●")
+	}
+	tail := m.theme.dim.Render(" ("+elapsed(since)+" · ") + m.hintKey().Render("esc") + m.theme.dim.Render(" to interrupt)")
+	if ansi.StringWidth(label)+gutter+ansi.StringWidth(trailer) > w {
+		tail = ""
+	}
+	return mark + " " + text + tail
+}
+
+// footerHints are the few keys that matter in the current state.
+func (m *model) footerHints() []string {
+	typed := m.input.Value() != ""
+	switch {
+	case m.editing != nil:
+		return []string{"enter", "save", "esc", "restore draft"}
+	case m.prompting && typed && m.client != nil && m.client.CanSteer() && !m.queuePaused:
+		return []string{"enter", "steer", "tab", "queue", "esc", "stop", "alt+enter", "newline"}
+	case m.prompting && typed:
+		return []string{"enter", "queue", "esc", "stop", "alt+enter", "newline"}
+	case m.prompting:
+		return []string{"esc", "stop", "ctrl+o", "details"}
+	case typed:
+		return []string{"enter", "send", "alt+enter", "newline", "ctrl+o", "details"}
+	}
+	return []string{"/", "commands", "@", "files", "ctrl+o", "details", "alt+enter", "newline"}
+}
+
+// footer puts the session settings on the left and hints on the right, on
+// one row when both fit. Panels carry their own hints, so these step aside.
+func (m *model) footer(w int, modal bool) string {
+	inner := w - gutter
+	status := ""
+	if m.client != nil {
+		status = m.configurationStatus(m.client.Agent, m.client.StatusFields(), inner)
+	}
+	if modal {
+		return hang("  ", status)
+	}
+	hints := m.hints(inner, m.footerHints()...)
+	if status == "" {
+		return "  " + hints
+	}
+	if !strings.Contains(status, "\n") {
+		gap := inner - ansi.StringWidth(status) - ansi.StringWidth(hints)
+		if gap >= 4 {
+			return "  " + status + strings.Repeat(" ", gap) + hints
+		}
+	}
+	return hang("  ", status) + "\n  " + hints
+}
+
+// placeholder says what sending will do right now.
+func (m *model) placeholder() string {
+	switch {
+	case m.editing != nil:
+		return "Edit the queued prompt…"
+	case m.client == nil && !m.busy && m.picker == nil:
+		return "Choose an agent with /agents…"
+	case m.prompting && m.client != nil && m.client.CanSteer() && !m.queuePaused:
+		return "Steer or queue a follow-up…"
+	case m.prompting:
+		return "Queue a follow-up…"
+	}
+	return "Ask anything…"
+}
+
 func (m *model) View() tea.View {
 	if m.quitting {
 		return tea.NewView("")
 	}
-	w := max(10, m.width-4)
+	w := m.lineWidth()
 	modal := m.picker != nil || m.permission != nil || m.elicitation != nil || m.confirm != nil || m.page != "chat" || m.authWaiting
 	inputView := m.input.View()
 	if modal {
@@ -167,52 +325,37 @@ func (m *model) View() tea.View {
 		if value == "" {
 			value = m.input.Placeholder
 		}
-		inputView = m.theme.muted.Render(line("❯ "+value, w))
+		inputView = m.theme.dim.Render(line("❯ "+value, w))
 	}
 	var statusParts []string
 	if m.busy && !modal {
-		elapsed := time.Since(m.startedAt).Round(time.Second)
-		status := m.status
-		if m.client != nil && m.client.TurnState() == client.TurnRequiresAction {
-			status = "Waiting on you"
-		}
-		if n := m.runningSubagents(); n == 1 {
-			status += " · 1 subagent running"
-		} else if n > 1 {
-			status += fmt.Sprintf(" · %d subagents running", n)
-		}
-		statusParts = append(statusParts, m.spinner.View()+" "+m.theme.muted.Render(line(status+" · "+elapsed.String()+" · Esc stop", w-2)))
+		statusParts = append(statusParts, m.statusLine(w))
 	}
 	if !m.busy && m.status != "" && m.status != "Ready" && m.lastError == "" {
-		statusParts = append(statusParts, m.theme.muted.Render(line(m.status, w)))
+		statusParts = append(statusParts, m.theme.muted.Render(line("  "+m.status, w)))
 	}
 	if m.lastError != "" {
-		statusParts = append(statusParts, m.theme.danger.Render(m.cropLines(ansi.Hardwrap(clean(m.lastError), w, true), 3, false)))
+		message := m.cropLines(ansi.Hardwrap(clean(m.lastError), w-gutter, true), 3, false)
+		statusParts = append(statusParts, hang(m.theme.danger.Render("×")+" ", m.theme.danger.Render(message)))
 	}
 	var badges []string
 	if !modal {
 		if n := len(m.attachments) + len(m.resources); n > 0 {
-			badges = append(badges, m.theme.muted.Render(fmt.Sprintf("%d attachment(s) · /detach to clear", n)))
+			label := "1 attachment"
+			if n > 1 {
+				label = fmt.Sprintf("%d attachments", n)
+			}
+			badges = append(badges, m.theme.muted.Render("  + "+label)+m.theme.dim.Render(" · ")+m.hints(w, "/detach", "to clear"))
 		}
 		if queue := m.queueView(w); queue != "" {
 			badges = append(badges, queue)
 		}
 	}
-	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
-	if m.prompting && m.input.Value() != "" {
-		footer = "Enter/Tab queue · Esc stop · Alt+Enter newline"
-		if m.client != nil && m.client.CanSteer() && !m.queuePaused {
-			footer = "Enter steer · Tab queue · Esc stop · Alt+Enter newline"
-		}
+	footer := m.footer(w, modal)
+	baseHeight := lipgloss.Height(inputView) + 2
+	if footer != "" {
+		baseHeight += lipgloss.Height(footer)
 	}
-	if m.editing != nil {
-		footer = "Enter save queued prompt · Esc restore draft"
-	}
-	footer = m.theme.muted.Render(line(footer, w))
-	if m.client != nil {
-		footer = m.configurationStatus(m.client.Agent, m.client.StatusFields(), w) + "\n" + footer
-	}
-	baseHeight := lipgloss.Height(inputView) + 2 + lipgloss.Height(footer)
 	for _, part := range append(append([]string{}, statusParts...), badges...) {
 		baseHeight += lipgloss.Height(part)
 	}
@@ -224,20 +367,29 @@ func (m *model) View() tea.View {
 	case m.elicitation != nil:
 		panel = m.elicitationPanel(panelHeight)
 	case m.confirm != nil:
-		action := "Delete this session from the agent and local history?"
-		if m.localDelete {
-			action = "Remove this session from local history?"
+		name := line(strings.TrimSpace(m.confirm.Title), max(8, w/2))
+		if name == "" {
+			name = "this session"
 		}
-		panel = m.theme.danger.Render(ansi.Hardwrap(action, w, true)) + "\n" + line(m.confirm.Title, w) + "\n" + m.theme.muted.Render("y delete · n / Esc keep")
+		action := fmt.Sprintf("Delete “%s” from the agent and local history?", name)
+		if m.localDelete {
+			action = fmt.Sprintf("Remove “%s” from local history?", name)
+		}
+		keys := m.theme.danger.Bold(true).Render("y") + m.theme.muted.Render(" delete") + m.theme.dim.Render(" · ") + m.hints(max(1, w-12), "n/esc", "keep")
+		panel = m.titleRule("Delete session", "", w, m.theme.danger.Bold(true)) + "\n" + hang("  ", ansi.Wrap(action, w-gutter, "")) + "\n" + keys
 	case m.page == "details" || m.page == "info" || m.page == "subagent" || m.authWaiting:
-		title, hint := "Details", "PgUp/PgDn scroll · Esc back"
+		title := "Details"
+		hints := []string{"pgup/pgdn", "scroll", "esc", "back"}
+		if m.page == "info" && m.pageTitle != "" {
+			title = m.pageTitle
+		}
 		if m.authWaiting {
 			title = "Signing in"
 		}
 		if m.page == "subagent" {
 			title = m.subagentTitle()
 			if child := m.subagents[m.subagent]; child.CanCancel && child.Active() {
-				hint += " · Ctrl+X stop subagent"
+				hints = append(hints, "ctrl+x", "stop subagent")
 			}
 		}
 		v := m.viewport
@@ -246,11 +398,19 @@ func (m *model) View() tea.View {
 		if bottom {
 			v.GotoBottom()
 		}
-		panel = m.theme.accent.Render(line(title, w)) + "\n" + v.View() + "\n" + m.theme.muted.Render(line(hint, w))
+		right := ""
+		if total := v.TotalLineCount(); total > v.Height() {
+			right = fmt.Sprintf("%d%%", int(v.ScrollPercent()*100))
+		}
+		panel = m.titleRule(title, right, w, m.theme.accent.Bold(true)) + "\n" + v.View() + "\n" + m.hints(w, hints...)
 	case m.picker != nil:
 		panel = m.pickerView(panelHeight)
 	case m.completion != nil:
 		panel = m.completionView(panelHeight)
+	}
+	// A panel opened right under a tool row gets a gap, as prose already has.
+	if panel != "" && modal && m.lastRow && m.height-baseHeight-lipgloss.Height(panel) > 1 {
+		panel = "\n" + panel
 	}
 	var parts []string
 	// The streaming tail and current plan stay in the managed area. Completed
@@ -265,14 +425,19 @@ func (m *model) View() tea.View {
 		if m.live != "" {
 			available -= 3 // Leave room to follow the streaming response.
 		}
+		// Between turns the checklist shrinks to its summary line.
+		if !m.busy && m.live == "" {
+			available = min(available, 1)
+		}
 		plan = m.planView(w, min(8, available))
 		if plan != "" {
 			overhead += lipgloss.Height(plan)
 		}
 	}
-	if m.live != "" && !modal && m.height > overhead {
-		available := m.height - overhead
-		parts = append(parts, m.cropLines(m.live, available, true))
+	// Keep one row spare: a view as tall as the terminal pushes a stale frame
+	// into scrollback.
+	if m.live != "" && !modal && m.height-1 > overhead {
+		parts = append(parts, m.cropLines(m.live, m.height-1-overhead, true))
 	}
 	if plan != "" {
 		parts = append(parts, plan)
@@ -288,17 +453,17 @@ func (m *model) View() tea.View {
 	if before != "" {
 		inputY = lipgloss.Height(before)
 	}
-	version := line("micro-acp "+buildinfo.Version, w-2)
-	bottomRule := strings.Repeat("─", w-ansi.StringWidth(version)-1) + " "
-	parts = append(parts, inputView, m.theme.rule.Render(bottomRule)+m.theme.muted.Render(version))
-	parts = append(parts, footer)
-	content := strings.Join(parts, "\n")
-	v := tea.NewView(lipgloss.NewStyle().PaddingLeft(1).Render(content))
+	version := line("micro-acp "+buildinfo.Version, max(1, w-4))
+	bottomRule := m.theme.rule.Render(strings.Repeat("─", max(0, w-ansi.StringWidth(version)-1))+" ") + m.theme.dim.Render(version)
+	parts = append(parts, inputView, bottomRule)
+	if footer != "" {
+		parts = append(parts, footer)
+	}
+	v := tea.NewView(strings.Join(parts, "\n"))
 	// Do not capture mouse events: copying and terminal scrollback should work.
 	if !modal {
 		v.Cursor = m.input.Cursor()
 		if v.Cursor != nil {
-			v.Cursor.X++
 			v.Cursor.Y += inputY
 		}
 	}

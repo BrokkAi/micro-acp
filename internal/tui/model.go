@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"image/color"
 	"sort"
 	"strings"
 	"time"
@@ -13,10 +14,12 @@ import (
 	tea "charm.land/bubbletea/v2"
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
+	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
 	"github.com/BrokkAi/micro-acp/internal/registry"
 	"github.com/BrokkAi/micro-acp/internal/store"
+	"github.com/charmbracelet/colorprofile"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -137,10 +140,29 @@ type model struct {
 	// agentTurn is a v2 turn the agent started without a prompt from here.
 	agentTurn          bool
 	renderCache        map[string]string
+	renderers          map[int]*markdownRenderer
 	printQueue         []string
 	printing, quitting bool
 	exitArmed          time.Time
+	// background is the terminal's reported background, used to derive
+	// tints; profile downsamples what is printed to scrollback, which Bubble
+	// Tea writes as-is.
+	background color.Color
+	profile    colorprofile.Profile
+	// headerPending holds scrollback until the theme is known, so the first
+	// lines are not printed in the wrong palette.
+	headerPending bool
+	// lastRow is whether the newest scrollback entry was a compact row.
+	lastRow bool
+	// activity names the running tool or plan step for the status line.
+	activity string
+	// pageTitle names the info page that is open.
+	pageTitle string
+	// reprinting is set while a changed row is printed again.
+	reprinting bool
 }
+
+type headerMsg struct{}
 
 func Run(ctx context.Context, options Options) error {
 	ctx, cancel := context.WithCancel(ctx)
@@ -155,10 +177,17 @@ func Run(ctx context.Context, options Options) error {
 	return err
 }
 func newModel(ctx context.Context, options Options) *model {
-	p := newPalette(true)
+	p := newPalette(true, nil, colorprofile.Unknown)
 	input := textarea.New()
-	input.Placeholder = "Ask anything…  / commands · @ files"
+	input.Placeholder = "Ask anything…"
 	input.Prompt = "❯ "
+	// Mark only the first row; wrapped and extra lines hang under the text.
+	input.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "❯ "
+		}
+		return "  "
+	})
 	input.ShowLineNumbers = false
 	input.CharLimit = 128 * 1024
 	input.DynamicHeight = true
@@ -169,22 +198,33 @@ func newModel(ctx context.Context, options Options) *model {
 	input.SetWidth(76)
 	input.SetVirtualCursor(false)
 	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter", "alt+enter", "ctrl+j"))
-	styles := input.Styles()
-	styles.Focused.CursorLine = plain
-	styles.Focused.Prompt = p.accent
-	styles.Focused.Placeholder = p.muted
-	input.SetStyles(styles)
 	s := spinner.New()
-	s.Spinner = spinner.Dot
-	s.Style = p.accent
+	s.Spinner = spinner.MiniDot
 	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, subagents: map[string]store.Subagent{}, committedIndex: -1, committedTools: map[int]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
-	m.rebuildAgents()
 	m.theme = p
+	m.applyTheme(true)
+	m.rebuildAgents()
 	return m
 }
+
+// header is the first thing printed: the name, version, and workspace.
+func (m *model) header() string {
+	title := m.theme.accent.Bold(true).Render("micro-acp") + m.theme.dim.Render(" "+buildinfo.Version)
+	cwd := truncateLeft(displayPath(m.options.Cwd, ""), m.lineWidth())
+	return title + "\n" + m.theme.muted.Render(cwd) + "\n"
+}
+func (m *model) printHeader() {
+	if !m.headerPending {
+		return
+	}
+	m.headerPending = false
+	m.printQueue = append([]string{m.header()}, m.printQueue...)
+}
 func (m *model) Init() tea.Cmd {
-	m.queueOutput(m.theme.accent.Bold(true).Render("micro-acp") + m.theme.muted.Render("  ·  "+clean(m.options.Cwd)) + "\n")
-	cmds := []tea.Cmd{m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation()}
+	// Ask for the background so tints and contrast match the terminal; print
+	// the header once it answers, or shortly after if it never does.
+	m.headerPending = true
+	cmds := []tea.Cmd{tea.RequestBackgroundColor, tea.Tick(250*time.Millisecond, func(time.Time) tea.Msg { return headerMsg{} }), m.spinner.Tick, pulse(), m.input.Focus(), m.waitPermission(), m.waitElicitation()}
 	if m.options.Agent != "demo" {
 		m.catalogLoading = true
 		cmds = append(cmds, m.fetchCatalog())
@@ -329,6 +369,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	updated = m
 	defer func() {
 		m.syncTranscript()
+		m.input.Placeholder = m.placeholder()
 		m.refreshQueuePicker()
 		if m.client != nil && m.picker != nil {
 			m.refreshSettingPicker(m.client.Selectors())
@@ -343,19 +384,27 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	}()
 	switch msg := msg.(type) {
 	case tea.BackgroundColorMsg:
+		m.background = msg.Color
 		m.applyTheme(msg.IsDark())
+		m.printHeader()
+	case headerMsg:
+		m.printHeader()
+	case tea.ColorProfileMsg:
+		m.profile = msg.Profile
+		m.applyTheme(m.theme.dark)
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.input.MaxHeight = min(8, max(1, m.height/3))
-		m.input.SetWidth(max(10, m.width-4))
-		m.viewport.SetWidth(max(10, m.width-4))
+		m.input.SetWidth(m.lineWidth())
+		m.viewport.SetWidth(m.lineWidth())
 		m.viewport.SetHeight(max(3, m.height-10))
 		m.renderCache = map[string]string{}
+		m.renderers = map[int]*markdownRenderer{}
 		if m.picker != nil {
-			m.picker.input.SetWidth(max(10, m.width-8))
+			m.picker.input.SetWidth(max(10, m.lineWidth()-gutter))
 		}
 		if m.elicitation != nil {
-			m.elicitation.input.SetWidth(max(10, m.width-8))
+			m.elicitation.input.SetWidth(max(10, m.lineWidth()-gutter))
 		}
 	case printedMsg:
 		m.printing = false
@@ -373,7 +422,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 		}
 		if m.catalog.Warning != "" {
-			m.queueOutput(m.theme.muted.Render(ansi.Wrap(clean(m.catalog.Warning), max(10, m.width-4), "")))
+			m.queueOutput(hang(m.theme.amber.Render("!")+" ", m.theme.muted.Render(ansi.Wrap(clean(m.catalog.Warning), m.proseWidth(), ""))))
 		}
 		if !m.started && m.options.Agent != "" {
 			m.started = true
@@ -465,6 +514,11 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 		}
 		m.syncTranscript()
+		if msg.prompt && msg.err == nil && msg.reason != "" && msg.reason != schema.StopReasonEndTurn {
+			// Mark where an interrupted reply ends in scrollback.
+			m.queueOutput(m.theme.dim.Render("  └ " + m.status))
+			m.lastRow = true
+		}
 		m.rebuildHistory()
 		if msg.prompt && msg.err == nil {
 			return m, m.dispatchQueue()
@@ -483,7 +537,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		m.status = "Ready"
 		var entries []item
 		for _, s := range msg.sessions {
-			entries = append(entries, item{title: s.Title, description: s.UpdatedAt.Local().Format("Jan 02 15:04") + " · " + s.ID, id: s.ID, value: s})
+			entries = append(entries, item{title: s.Title, description: ago(s.UpdatedAt, time.Now()) + " · " + s.ID, id: s.ID, value: s})
 		}
 		m.openPicker("sessions", entries)
 		if msg.err != nil {
@@ -793,13 +847,28 @@ func (m *model) queueOutput(s string) {
 	}
 }
 func (m *model) flushOutput() tea.Cmd {
-	if m.printing || len(m.printQueue) == 0 {
+	if m.printing || m.headerPending || len(m.printQueue) == 0 {
 		return nil
 	}
-	text := strings.Join(m.printQueue, "\n")
+	text := m.downsample(strings.Join(m.printQueue, "\n"))
 	m.printQueue = nil
 	m.printing = true
 	return tea.Sequence(tea.Println(text), func() tea.Msg { return printedMsg{} })
+}
+
+// downsample converts colors to the terminal's profile. Bubble Tea does this
+// for the view but prints scrollback verbatim, so committed rows would
+// otherwise change color as they leave the managed area.
+func (m *model) downsample(text string) string {
+	if m.profile == colorprofile.Unknown || m.profile == colorprofile.TrueColor {
+		return text
+	}
+	var b strings.Builder
+	w := colorprofile.Writer{Forward: &b, Profile: m.profile}
+	if _, err := w.WriteString(text); err != nil {
+		return text
+	}
+	return b.String()
 }
 func (m *model) startPrompt(q queuedPrompt) tea.Cmd {
 	c := m.client

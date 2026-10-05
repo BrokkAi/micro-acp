@@ -218,7 +218,7 @@ func (m *model) command(text string) tea.Cmd {
 		return nil
 	case "/info":
 		m.info = c.Details()
-		m.page = "info"
+		m.page, m.pageTitle = "info", "Agent details"
 		m.viewport.SetContent(clean(m.info))
 		m.viewport.GotoTop()
 		return nil
@@ -227,7 +227,7 @@ func (m *model) command(text string) tea.Cmd {
 		if m.info == "" {
 			m.info = "No agent errors or stderr output."
 		}
-		m.page = "info"
+		m.page, m.pageTitle = "info", "Agent logs"
 		m.viewport.SetContent(clean(m.info))
 		m.viewport.GotoTop()
 		return nil

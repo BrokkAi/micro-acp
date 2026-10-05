@@ -33,11 +33,12 @@ func (m *model) planView(width, height int) string {
 			}
 		}
 	}
-	header := fmt.Sprintf("Plan · %d/%d complete", completed, len(entries))
+	count := fmt.Sprintf(" · %d/%d complete", completed, len(entries))
+	header := m.hintKey().Bold(true).Render("Plan") + m.theme.muted.Render(line(count, max(1, width-4)))
 	if height == 1 {
-		return m.theme.accent.Render(line(header+" · Ctrl+O details", width))
+		return header + m.theme.dim.Render(line(" · ctrl+o details", max(1, width-4-ansi.StringWidth(count))))
 	}
-	rows := []string{m.theme.accent.Bold(true).Render(line(header, width))}
+	rows := []string{header}
 	limit := height - 1
 	truncated := len(entries) > limit
 	if truncated && limit > 1 {
@@ -46,28 +47,26 @@ func (m *model) planView(width, height int) string {
 	start := min(max(0, active-limit/2), max(0, len(entries)-limit))
 	end := min(len(entries), start+limit)
 	for _, entry := range entries[start:end] {
-		mark, style := "○", m.theme.muted
+		// Only the step in progress draws the eye; finished steps recede.
+		mark, style := "□", m.theme.muted
 		textStyle := plain
 		switch entry.Status {
 		case schema.PlanEntryStatusCompleted:
-			mark, style, textStyle = "✓", m.theme.mint, m.theme.muted
+			mark, style, textStyle = "✓", m.theme.mint, m.theme.dim.Strikethrough(true)
 		case schema.PlanEntryStatusInProgress:
-			mark, style, textStyle = "›", m.theme.accent, m.theme.accent
+			mark, style, textStyle = "■", m.theme.accent, m.theme.accent.Bold(true)
 		}
-		priorityStyle := m.theme.muted
-		switch entry.Priority {
-		case schema.PlanEntryPriorityHigh:
-			priorityStyle = m.theme.amber
-		case schema.PlanEntryPriorityMedium:
-			priorityStyle = m.theme.cyan
+		priority := ""
+		if entry.Priority == schema.PlanEntryPriorityHigh {
+			priority = " · high"
 		}
-		prefix := style.Render(mark+" ") + priorityStyle.Render("["+line(string(entry.Priority), 6)+"] ")
-		row := prefix + textStyle.Render(line(entry.Content, max(1, width-ansi.StringWidth(prefix))))
-		rows = append(rows, ansi.Truncate(row, width, "…"))
+		prefix := "  " + style.Render(mark) + " "
+		content := line(entry.Content, max(1, width-ansi.StringWidth(prefix)-ansi.StringWidth(priority)))
+		rows = append(rows, ansi.Truncate(prefix+textStyle.Render(content)+m.theme.amber.Render(priority), width, "…"))
 	}
 	if truncated && len(rows) < height {
-		hint := fmt.Sprintf("%d–%d of %d · Ctrl+O details", start+1, end, len(entries))
-		rows = append(rows, m.theme.muted.Render(line(hint, width)))
+		hint := fmt.Sprintf("    %d–%d of %d · ctrl+o details", start+1, end, len(entries))
+		rows = append(rows, m.theme.dim.Render(line(hint, width)))
 	}
 	return strings.Join(rows, "\n")
 }

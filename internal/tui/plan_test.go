@@ -62,7 +62,7 @@ func TestLivePlanUpdatesAndSessionLifecycle(t *testing.T) {
 	m.startedAt = time.Now()
 	done := make(chan error, 1)
 	go func() { _, err := m.client.Prompt("plan"); done <- err }()
-	for stage, want := range []string{"› [high] Review the code", "› [medium] Run the tests", "Plan · 3/3 complete"} {
+	for stage, want := range []string{"■ Review the code · high", "■ Run the tests", "Plan · 3/3 complete"} {
 		var gate client.Permission
 		select {
 		case gate = <-m.client.Permissions:
@@ -71,10 +71,10 @@ func TestLivePlanUpdatesAndSessionLifecycle(t *testing.T) {
 		}
 		m.syncTranscript()
 		view := ansi.Strip(m.View().Content)
-		if !strings.Contains(view, want) || strings.Count(view, "Plan ·") != 1 || !strings.Contains(view, "[low] Update the docs") {
+		if !strings.Contains(view, want) || strings.Count(view, "Plan ·") != 1 || !strings.Contains(view, "Update the docs") {
 			t.Errorf("stage %d: missing or duplicated checklist:\n%s", stage, view)
 		}
-		if stage > 0 && strings.Contains(view, "› [high]") {
+		if stage > 0 && strings.Contains(view, "■ Review the code") {
 			t.Error("old plan status remained visible")
 		}
 		if strings.Contains(strings.Join(m.printQueue, "\n"), "Review the code") {
@@ -139,7 +139,7 @@ func TestPlanLayoutKeepsActiveStepAndComposerVisible(t *testing.T) {
 		if lipgloss.Width(view.Content) > size[0] || lipgloss.Height(view.Content) > size[1] {
 			t.Errorf("layout exceeds %v:\n%s", size, text)
 		}
-		for _, want := range []string{"Plan · 16/20", "› [high] Step 16", "my draft", "Streaming output"} {
+		for _, want := range []string{"Plan · 16/20", "■ Step 16", "my draft", "Streaming output"} {
 			if !strings.Contains(text, want) {
 				t.Errorf("%v: missing %q:\n%s", size, want, text)
 			}

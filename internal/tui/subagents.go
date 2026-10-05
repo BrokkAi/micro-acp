@@ -9,7 +9,7 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-const subagentMark = "⧉"
+const subagentMark = "◇"
 
 // subagentName adds the run number of a resumed child to its name.
 func subagentName(child store.Subagent) string {
@@ -60,13 +60,14 @@ func (m *model) subagentView(message store.Message, details bool, width int) str
 	name := clean(subagentName(child))
 	state := m.theme.muted.Render(" · ") + style.Render(child.StateLabel())
 	if !details {
-		row := style.Render(subagentMark+" ") + style.Bold(true).Render(line(name, max(1, width-2-ansi.StringWidth(state)))) + state
-		if child.Description != "" && child.Description != child.Title {
-			row += "\n  " + m.theme.muted.Render(line(child.Description, width-2))
+		row := style.Render(subagentMark+" ") + m.hintKey().Bold(true).Render(line(name, max(1, width-2-ansi.StringWidth(state)))) + state
+		// A reprinted row only reports the new state; the task was shown once.
+		if child.Description != "" && child.Description != child.Title && !m.reprinting {
+			row += "\n" + m.theme.dim.Render("  └ ") + m.theme.muted.Render(line(child.Description, width-4))
 		}
 		return row
 	}
-	rendered := style.Render(subagentMark+" ") + style.Bold(true).Render(ansi.Hardwrap(name, width-2, true)) + state
+	rendered := style.Render(subagentMark+" ") + m.hintKey().Bold(true).Render(ansi.Hardwrap(name, width-2, true)) + state
 	if child.Description != "" && child.Description != child.Title {
 		rendered += "\n" + indentTool(m.theme.muted.Render(ansi.Hardwrap(clean(child.Description), width-2, true)), 2)
 	}
@@ -85,8 +86,8 @@ func (m *model) sessionName(id string) string {
 }
 
 func (m *model) sessionMessageView(message store.Message, width int) string {
-	header := m.theme.muted.Render(line("✉ "+m.sessionName(message.Sender)+" → "+m.sessionName(message.Recipient), width))
-	return header + "\n" + m.markdown(message.Text) + "\n"
+	header := m.theme.dim.Render("»") + " " + m.theme.muted.Render(line(m.sessionName(message.Sender)+" → "+m.sessionName(message.Recipient), width-gutter))
+	return header + "\n" + hang("  ", m.markdown(message.Text, width)) + "\n"
 }
 
 // subagentItems lists the active tree depth first, children under parents.

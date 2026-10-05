@@ -10,6 +10,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/BrokkAi/micro-acp/internal/store"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func composer(t *testing.T) *model {
@@ -132,7 +133,7 @@ func TestNormalTerminalAndCompactSuggestions(t *testing.T) {
 	if strings.Count(view.Content, "\n") > 14 {
 		t.Fatal("suggestions turned into a full-screen menu")
 	}
-	if !strings.Contains(view.Content, "Tab complete") {
+	if !strings.Contains(ansi.Strip(view.Content), "tab complete") {
 		t.Fatal("completion controls missing")
 	}
 }

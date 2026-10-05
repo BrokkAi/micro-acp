@@ -6,6 +6,7 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/store"
 	"github.com/sahilm/fuzzy"
@@ -36,12 +37,26 @@ func filterItems(entries []item, query string) []item {
 	return result
 }
 func (p *picker) filter() { p.matches = filterItems(p.entries, p.input.Value()); p.index = 0 }
+
+// textInput is a single-line field styled like the composer.
+func (m *model) textInput() textinput.Model {
+	input := textinput.New()
+	input.Prompt = "❯ "
+	styles := input.Styles()
+	styles.Focused.Prompt = m.theme.accent
+	styles.Focused.Placeholder = m.theme.dim
+	styles.Focused.Text = plain
+	styles.Blurred.Prompt = m.theme.dim
+	styles.Blurred.Placeholder = m.theme.dim
+	styles.Cursor.Color = lipgloss.Color(m.theme.textHex)
+	input.SetStyles(styles)
+	input.SetWidth(max(10, m.lineWidth()-gutter))
+	return input
+}
 func (m *model) openPicker(kind string, entries []item) {
 	titles := map[string]string{"agents": "Choose an agent", "sessions": "Resume a session", "settings": "Session configuration", "choices": m.selector.Name, "auth": "Sign in", "queue": "Queued prompts", "commands": "Commands", "subagents": "Subagents"}
-	input := textinput.New()
+	input := m.textInput()
 	input.Placeholder = "Type to search…"
-	input.Prompt = "› "
-	input.SetWidth(max(10, m.width-8))
 	input.Focus()
 	m.picker = &picker{kind: kind, title: titles[kind], entries: entries, matches: entries, input: input}
 	m.completion = nil

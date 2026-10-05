@@ -10,17 +10,28 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func (m *model) markdown(text string) string {
-	width := max(12, m.width-4)
+type markdownRenderer = glamour.TermRenderer
+
+// lineWidth is the widest row the client prints. The last column stays free:
+// erasing to the end of a line that filled it would clip its final cell.
+func (m *model) lineWidth() int { return max(10, m.width-1) }
+
+// proseWidth leaves the gutter on the left and a small margin on the right.
+func (m *model) proseWidth() int { return max(12, m.width-gutter-2) }
+
+func (m *model) markdown(text string, width int) string {
 	key := fmt.Sprintf("%d:%s", width, text)
 	if cached, ok := m.renderCache[key]; ok {
 		return cached
 	}
-	style := "dark"
-	if !m.theme.dark {
-		style = "light"
+	renderer, ok := m.renderers[width]
+	var err error
+	if !ok {
+		renderer, err = glamour.NewTermRenderer(glamour.WithStyles(m.theme.markdownStyle(width)), glamour.WithWordWrap(width), glamour.WithPreservedNewLines(), glamour.WithChromaFormatter("terminal16m"))
+		if err == nil {
+			m.renderers[width] = renderer
+		}
 	}
-	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle(style), glamour.WithWordWrap(width), glamour.WithPreservedNewLines())
 	rendered := ""
 	if err == nil {
 		rendered, err = renderer.Render(clean(text))
@@ -28,17 +39,43 @@ func (m *model) markdown(text string) string {
 	if err != nil {
 		rendered = ansi.Hardwrap(clean(text), width, true)
 	}
-	// Remove vertical padding, preserving code indentation and ANSI styling.
-	rendered = strings.Trim(rendered, "\n")
+	// Glamour pads every line to the wrap width and frames blocks with blank
+	// lines. Streaming renders one paragraph at a time, so remove both and
+	// let the transcript decide the spacing.
+	rendered = hangLists(trimRight(rendered), width)
 	if len(m.renderCache) > 128 {
 		m.renderCache = map[string]string{}
 	}
 	m.renderCache[key] = rendered
 	return rendered
 }
+
+// band renders a tinted row padded to width. Every segment carries the
+// background itself, so inner resets cannot punch holes in it.
+func (m *model) band(width int, segments ...string) string {
+	bg := on(m.theme.surface)
+	var b strings.Builder
+	used := 0
+	for i := 0; i+1 < len(segments); i += 2 {
+		style := bg
+		switch segments[i] {
+		case "accent":
+			style = m.theme.accent.Inherit(bg)
+		case "muted":
+			style = m.theme.muted.Inherit(bg)
+		}
+		b.WriteString(style.Render(segments[i+1]))
+		used += ansi.StringWidth(segments[i+1])
+	}
+	if used < width && m.theme.surface != nil {
+		b.WriteString(bg.Render(strings.Repeat(" ", width-used)))
+	}
+	return b.String()
+}
+
 func (m *model) messageView(message store.Message, details bool, continuation bool) string {
 	text := clean(message.Text)
-	width := max(12, m.width-4)
+	width := m.proseWidth()
 	switch message.Role {
 	case "user":
 		if len(message.Content) > 0 && message.Content[0].Text != nil {
@@ -47,17 +84,37 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 		if text == "" {
 			text = "Attached context"
 		}
-		result := m.theme.accent.Render("❯ ") + strings.ReplaceAll(ansi.Wrap(text, max(10, width-2), ""), "\n", "\n  ")
-		if len(message.Content) > 1 {
-			result += "\n" + m.theme.muted.Render(fmt.Sprintf("  %d attachment(s)", len(message.Content)-1))
+		// The tint is sized to the text rather than the window, so it still
+		// reads as one block after the terminal is resized.
+		full := m.lineWidth()
+		lines := strings.Split(ansi.Wrap(strings.TrimRight(text, "\n"), max(8, width-1), ""), "\n")
+		bandWidth := 0
+		for i, row := range lines {
+			lines[i] = ansi.Truncate(row, full-gutter-1, "…")
+			bandWidth = max(bandWidth, gutter+ansi.StringWidth(lines[i])+1)
 		}
-		return result + "\n"
+		var rows []string
+		for i, row := range lines {
+			marker := strings.Repeat(" ", gutter)
+			if i == 0 {
+				marker = "❯ "
+			}
+			rows = append(rows, m.band(bandWidth, "accent", marker, "", row))
+		}
+		if n := len(message.Content) - 1; n > 0 {
+			label := "1 attachment"
+			if n > 1 {
+				label = fmt.Sprintf("%d attachments", n)
+			}
+			rows = append(rows, m.theme.dim.Render("  └ ")+m.theme.muted.Render(label))
+		}
+		return strings.Join(rows, "\n") + "\n"
 	case "assistant":
-		prefix := ""
+		marker := strings.Repeat(" ", gutter)
 		if !continuation {
-			prefix = m.theme.mint.Render("● ")
+			marker = m.hintKey().Render("●") + " "
 		}
-		return prefix + m.markdown(text) + "\n"
+		return hang(marker, m.markdown(text, width)) + "\n"
 	case "tool":
 		return m.toolView(message, details, width)
 	case "subagent":
@@ -65,24 +122,26 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 	case "message":
 		return m.sessionMessageView(message, width)
 	case "thought":
+		thinking := m.theme.muted.Italic(true)
 		if details {
-			return m.theme.muted.Render("Thinking\n"+ansi.Hardwrap(text, width, true)) + "\n"
+			return hang(m.theme.muted.Render("·")+" ", thinking.Render("Thinking")+"\n"+thinking.Render(ansi.Hardwrap(text, width, true))) + "\n"
 		}
-		return m.theme.muted.Render("· Thinking  " + line(strings.Join(strings.Fields(text), " "), max(10, width-13)))
+		summary := line(strings.Join(strings.Fields(text), " "), max(10, width-11))
+		return m.theme.muted.Render("·") + " " + thinking.Render("Thinking ") + m.theme.dim.Italic(true).Render(summary)
 	case "terminal":
 		lines := strings.Split(text, "\n")
-		summary := m.theme.amber.Render("$ " + line(lines[0], width-2))
+		summary := m.theme.dim.Render("$") + " " + m.hintKey().Bold(true).Render(line(lines[0], width-gutter))
 		if details {
-			return m.theme.amber.Render(ansi.Hardwrap("$ "+lines[0], width, true)) + "\n" + m.toolText(strings.Join(lines[1:], "\n"), width) + "\n"
+			return hang(m.theme.dim.Render("$")+" ", m.hintKey().Bold(true).Render(ansi.Hardwrap(lines[0], width-gutter, true))) + "\n" + m.toolText(strings.Join(lines[1:], "\n"), width) + "\n"
 		}
 		if len(lines) > 1 {
-			summary += "\n  " + m.toolText(line(lines[len(lines)-1], width-2), width-2)
+			summary += "\n" + m.theme.dim.Render("  └ ") + m.toolText(line(lines[len(lines)-1], width-4), width-4)
 		}
 		return summary
 	case "plan":
-		return m.theme.muted.Render("Plan\n" + ansi.Hardwrap(text, width, true))
+		return m.theme.muted.Bold(true).Render("Plan") + "\n" + m.theme.muted.Render(ansi.Wrap(text, width, ""))
 	default:
-		return m.theme.muted.Render(ansi.Hardwrap(text, width, true))
+		return m.theme.muted.Render(ansi.Wrap(text, width, ""))
 	}
 }
 
@@ -144,11 +203,13 @@ func (m *model) syncTranscript() {
 		m.streamPrefix = 0
 		m.committedIndex, m.committedText = -1, ""
 		m.committedTools = map[int]string{}
-		label := m.client.Agent + " · " + s.Title
+		agent := line(m.client.Agent, max(1, m.lineWidth()/2))
+		label := m.hintKey().Bold(true).Render(agent) + m.theme.muted.Render(line(" · "+s.Title, max(1, m.lineWidth()-ansi.StringWidth(agent)-7)))
 		if s.ParentID != "" {
-			label += " · fork"
+			label += m.theme.dim.Render(" · fork")
 		}
-		m.queueOutput(m.theme.muted.Render(line(label, m.width-4)) + "\n")
+		m.queueOutput(label + "\n")
+		m.lastRow = false
 	}
 	if m.page == "details" {
 		m.refreshDetails()
@@ -194,7 +255,7 @@ func (m *model) syncTranscript() {
 		}
 		if final {
 			if message.Text != "" {
-				m.queueOutput(m.messageView(message, false, m.streamPrefix > 0))
+				m.printMessage(message, m.streamPrefix > 0)
 			}
 			m.committedIndex, m.committedText = i, committed
 			if signature, ok := m.rowSignature(message); ok {
@@ -208,7 +269,7 @@ func (m *model) syncTranscript() {
 			if n := stablePrefix(message.Text); n > 0 {
 				prefix := message
 				prefix.Text = message.Text[:n]
-				m.queueOutput(m.messageView(prefix, false, m.streamPrefix > 0))
+				m.printMessage(prefix, m.streamPrefix > 0)
 				m.streamPrefix += n
 			}
 		}
@@ -226,7 +287,7 @@ func (m *model) syncTranscript() {
 			delta := message
 			delta.Text = message.Text[len(m.committedText):]
 			// Keep the assistant bullet when nothing was committed yet.
-			m.queueOutput(m.messageView(delta, false, m.committedText != ""))
+			m.printMessage(delta, m.committedText != "")
 			m.committedText = message.Text
 		}
 	}
@@ -237,11 +298,14 @@ func (m *model) syncTranscript() {
 			continue
 		}
 		if current, _ := m.rowSignature(message); current != committed {
-			m.queueOutput(m.messageView(message, false, false))
+			m.reprinting = true
+			m.printMessage(message, false)
+			m.reprinting = false
 			m.committedTools[i] = current
 		}
 	}
 	var live []string
+	previousRow := m.lastRow
 	for i := m.printedIndex; i < len(s.Messages); i++ {
 		message := s.Messages[i]
 		if message.Pending {
@@ -255,10 +319,60 @@ func (m *model) syncTranscript() {
 			message.Text = message.Text[min(m.streamPrefix, len(message.Text)):]
 		}
 		if message.Text != "" {
-			live = append(live, m.messageView(message, false, continued))
+			view := m.messageView(message, false, continued)
+			row := compactRole(message.Role)
+			if previousRow && !row && !continued {
+				view = "\n" + view
+			}
+			live = append(live, view)
+			previousRow = row
 		}
 	}
 	m.live = strings.Join(live, "\n")
+	m.activity = activity(s.Messages, m.plan)
+}
+
+// activity names what the agent is doing right now for the status line: the
+// newest running tool call in this turn, else the plan step in progress.
+func activity(messages []store.Message, plan *schema.Plan) string {
+	for i := len(messages) - 1; i >= 0 && messages[i].Role != "user"; i-- {
+		message := messages[i]
+		if message.Role != "tool" || message.Tool == nil || message.Cancelled || strings.TrimSpace(message.Tool.Title) == "" {
+			continue
+		}
+		if status := message.Tool.Status; status == nil || *status == schema.ToolCallStatusPending || *status == schema.ToolCallStatusInProgress {
+			return message.Tool.Title
+		}
+	}
+	if plan != nil {
+		for _, entry := range plan.Entries {
+			if entry.Status == schema.PlanEntryStatusInProgress {
+				return entry.Content
+			}
+		}
+	}
+	return ""
+}
+
+// compactRole reports rows that stack without blank lines between them.
+func compactRole(role string) bool {
+	switch role {
+	case "tool", "thought", "subagent", "terminal":
+		return true
+	}
+	return false
+}
+
+// printMessage commits a message to scrollback. Tool and thinking rows stack
+// tightly; prose that follows them gets a blank line, like the prose before.
+func (m *model) printMessage(message store.Message, continuation bool) {
+	view := m.messageView(message, false, continuation)
+	row := compactRole(message.Role)
+	if m.lastRow && !row && !continuation {
+		view = "\n" + view
+	}
+	m.queueOutput(view)
+	m.lastRow = row
 }
 
 // rowSignature is what a committed tool or subagent row shows. Rows are

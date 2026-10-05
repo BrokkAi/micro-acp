@@ -41,9 +41,9 @@ func (m *model) statusValue(field client.StatusField, width int) string {
 		}
 	}
 	if field.Boolean {
-		text, style = "○ "+field.Name, m.theme.muted
+		text, style = "○ "+field.Name, m.theme.dim
 		if field.Enabled {
-			text, style = "✓ "+field.Name, m.theme.mint
+			text, style = "● "+field.Name, m.theme.mint
 		}
 	}
 	return style.Render(line(text, width))
@@ -52,17 +52,17 @@ func (m *model) statusValue(field client.StatusField, width int) string {
 // Style values independently; separators and hints stay quiet. Measure visible
 // cell widths so ANSI styles do not change wrapping or hide the overflow hint.
 func (m *model) configurationStatus(agent string, fields []client.StatusField, width int) string {
-	values := []string{m.theme.muted.Render(line(agent, width))}
+	values := []string{m.hintKey().Render(line(agent, width))}
 	for _, field := range fields {
 		values = append(values, m.statusValue(field, width))
 	}
-	separator := m.theme.rule.Render(" · ")
+	separator := m.theme.dim.Render(" · ")
 	for count := len(values); count >= 0; count-- {
 		hint := "/config"
 		if count < len(values) {
 			hint = fmt.Sprintf("+%d more · /config", len(values)-count)
 		}
-		chunks := append(append([]string{}, values[:count]...), m.theme.muted.Render(line(hint, width)))
+		chunks := append(append([]string{}, values[:count]...), m.theme.dim.Render(line(hint, width)))
 		var rows []string
 		row := ""
 		for _, chunk := range chunks {

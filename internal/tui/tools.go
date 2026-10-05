@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"slices"
+	"strconv"
 	"strings"
+	"sync"
 
 	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/acp-go/schema"
@@ -15,26 +18,18 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func (m *model) toolStyle(tool *schema.ToolCall) lipgloss.Style {
-	if tool != nil && tool.Kind != nil {
-		switch *tool.Kind {
-		case schema.ToolKindRead, schema.ToolKindSearch, schema.ToolKindFetch:
-			return m.theme.cyan
-		case schema.ToolKindExecute, schema.ToolKindMove:
-			return m.theme.amber
-		case schema.ToolKindDelete:
-			return m.theme.danger
-		}
-	}
-	return m.theme.accent
+type toolDiff struct {
+	path, label      string
+	added, removed   int
+	counted, renamed bool
 }
 
-type toolDiff struct{ path, label string }
-
 type toolSummary struct {
-	mark  string
-	title string
-	diffs []toolDiff
+	mark    string
+	title   string
+	diffs   []toolDiff
+	preview []string
+	failed  bool
 }
 
 // summarizeTool extracts what the compact tool line shows. It is independent
@@ -51,21 +46,30 @@ func summarizeTool(message store.Message) toolSummary {
 				summary.mark = "✓"
 			case schema.ToolCallStatusFailed:
 				summary.mark = "×"
+				summary.failed = true
 			}
 		}
 		for _, part := range tool.Content {
 			if part.Diff == nil {
 				continue
 			}
-			label := "updated"
+			label, old := "updated", ""
 			if part.Diff.OldText == nil {
 				label = "created"
+			} else {
+				old = *part.Diff.OldText
 			}
-			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(part.Diff.Path), "\n", " "), label: label})
+			added, removed := diffStat(old, part.Diff.NewText)
+			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(part.Diff.Path), "\n", " "), label: label, added: added, removed: removed, counted: true})
 		}
 		for _, change := range message.Changes {
 			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(change.Path), "\n", " "), label: clean(change.Label())})
 		}
+		if len(message.Changes) == 1 && message.Patch != "" && len(summary.diffs) == 1 {
+			added, removed := patchStat(message.Patch)
+			summary.diffs[0].added, summary.diffs[0].removed, summary.diffs[0].counted = added, removed, true
+		}
+		summary.preview = toolPreview(*tool, summary.failed)
 	} else if message.Text != "" {
 		summary.title = strings.Split(message.Text, "\n")[0]
 	}
@@ -77,23 +81,165 @@ func summarizeTool(message store.Message) toolSummary {
 	return summary
 }
 
+// toolPreview picks the few output lines worth keeping in scrollback: why a
+// call failed, or how a command finished. Everything else waits for Ctrl+O.
+func toolPreview(tool schema.ToolCall, failed bool) []string {
+	execute := tool.Kind != nil && *tool.Kind == schema.ToolKindExecute
+	if !failed && !execute {
+		return nil
+	}
+	var lines []string
+	for _, part := range tool.Content {
+		if part.Content == nil || part.Content.Content.Text == nil {
+			continue
+		}
+		for _, row := range strings.Split(clean(part.Content.Content.Text.Text), "\n") {
+			row = strings.TrimRight(strings.ReplaceAll(row, "\t", "    "), " ")
+			trimmed := strings.TrimSpace(row)
+			if trimmed == "" || strings.HasPrefix(trimmed, "```") || strings.HasPrefix(trimmed, "~~~") {
+				continue
+			}
+			lines = append(lines, row)
+		}
+	}
+	if len(lines) == 0 && failed {
+		// Without readable output, a failure may still carry its reason in
+		// the raw result.
+		var fields map[string]any
+		var text string
+		if json.Unmarshal(tool.RawOutput, &fields) == nil {
+			for _, key := range []string{"error", "message", "stderr"} {
+				if value, ok := fields[key].(string); ok && strings.TrimSpace(value) != "" {
+					text = value
+					break
+				}
+			}
+		} else if json.Unmarshal(tool.RawOutput, &text) != nil {
+			text = ""
+		}
+		for _, row := range strings.Split(clean(text), "\n") {
+			if strings.TrimSpace(row) != "" {
+				return []string{strings.TrimRight(row, " ")}
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	// A failure explains itself up front; a command's verdict comes last.
+	if failed {
+		return lines[:1]
+	}
+	return lines[max(0, len(lines)-2):]
+}
+
 // toolSignature is the committed-transcript form of summarizeTool.
 func toolSignature(message store.Message) string {
 	summary := summarizeTool(message)
 	rows := []string{summary.mark + " " + summary.title}
 	for _, diff := range summary.diffs {
-		rows = append(rows, diff.path+" · "+diff.label)
+		rows = append(rows, fmt.Sprintf("%s · %s · +%d -%d", diff.path, diff.label, diff.added, diff.removed))
 	}
+	rows = append(rows, summary.preview...)
 	return strings.Join(rows, "\n")
+}
+
+var diffStats sync.Map
+
+// diffStat counts changed lines. Committed rows are re-summarized on every
+// update, so results are memoized by content.
+func diffStat(old, new string) (added, removed int) {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(old))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write([]byte(new))
+	key := h.Sum64()
+	if cached, ok := diffStats.Load(key); ok {
+		counts := cached.([2]int)
+		return counts[0], counts[1]
+	}
+	added, removed = patchStat(udiff.Unified("a", "b", old, new))
+	diffStats.Store(key, [2]int{added, removed})
+	return added, removed
+}
+
+func patchStat(patch string) (added, removed int) {
+	for _, row := range parsePatch(patch) {
+		switch row.kind {
+		case '+':
+			added++
+		case '-':
+			removed++
+		}
+	}
+	return added, removed
+}
+
+// diffRow is one line of a parsed patch. kind is '+', '-', ' ', '@' for a
+// hunk break, or 0 for text outside any hunk.
+type diffRow struct {
+	kind   byte
+	number int
+	text   string
+}
+
+// parsePatch walks hunks by their declared sizes, so content such as a
+// removed "-- comment" line is never mistaken for a file header. Removed
+// lines carry their old line number and the rest their new one.
+func parsePatch(patch string) []diffRow {
+	rows := strings.Split(strings.TrimSuffix(strings.ReplaceAll(patch, "\t", "    "), "\n"), "\n")
+	var parsed []diffRow
+	oldLine, newLine, oldLeft, newLeft := 0, 0, 0, 0
+	for _, row := range rows {
+		inHunk := oldLeft > 0 || newLeft > 0
+		switch {
+		case !inHunk && strings.HasPrefix(row, "@@"):
+			hunk, ok := parseHunk(row)
+			if !ok {
+				parsed = append(parsed, diffRow{text: row})
+				continue
+			}
+			oldLine, newLine, oldLeft, newLeft = hunk[0], hunk[2], hunk[1], hunk[3]
+			parsed = append(parsed, diffRow{kind: '@'})
+		case !inHunk:
+			if !strings.HasPrefix(row, "--- ") && !strings.HasPrefix(row, "+++ ") && !strings.HasPrefix(row, "diff ") && !strings.HasPrefix(row, "index ") {
+				parsed = append(parsed, diffRow{text: row})
+			}
+		case strings.HasPrefix(row, "+"):
+			parsed = append(parsed, diffRow{'+', newLine, row[1:]})
+			newLine, newLeft = newLine+1, newLeft-1
+		case strings.HasPrefix(row, "-"):
+			parsed = append(parsed, diffRow{'-', oldLine, row[1:]})
+			oldLine, oldLeft = oldLine+1, oldLeft-1
+		case strings.HasPrefix(row, `\`):
+			parsed = append(parsed, diffRow{text: row})
+		default:
+			parsed = append(parsed, diffRow{' ', newLine, strings.TrimPrefix(row, " ")})
+			oldLine, newLine, oldLeft, newLeft = oldLine+1, newLine+1, oldLeft-1, newLeft-1
+		}
+	}
+	return parsed
+}
+
+// diffCounts renders "+3 -1" in diff colors, omitting zero sides.
+func (m *model) diffCounts(added, removed int) string {
+	var parts []string
+	if added > 0 {
+		parts = append(parts, m.theme.mint.Render("+"+strconv.Itoa(added)))
+	}
+	if removed > 0 {
+		parts = append(parts, m.theme.danger.Render("-"+strconv.Itoa(removed)))
+	}
+	return strings.Join(parts, " ")
 }
 
 func (m *model) toolView(message store.Message, details bool, width int) string {
 	tool := message.Tool
 	summary := summarizeTool(message)
-	markStyle, titleStyle := m.theme.muted, m.toolStyle(tool)
+	markStyle, titleStyle := m.theme.muted, m.hintKey().Bold(true)
 	switch {
-	case tool != nil && tool.Status != nil && *tool.Status == schema.ToolCallStatusFailed:
-		markStyle, titleStyle = m.theme.danger, m.theme.danger
+	case summary.failed:
+		markStyle = m.theme.danger
 	case tool != nil && tool.Status != nil && *tool.Status == schema.ToolCallStatusCompleted:
 		markStyle = m.theme.mint
 	}
@@ -102,8 +248,7 @@ func (m *model) toolView(message store.Message, details bool, width int) string 
 	}
 	if details {
 		// Details wrap the full title; compact scrollback keeps a single row.
-		styledTitle := titleStyle.Bold(true).Render(ansi.Hardwrap(clean(summary.title), width-2, true))
-		rendered := markStyle.Render(summary.mark+" ") + strings.ReplaceAll(styledTitle, "\n", "\n  ")
+		rendered := hang(markStyle.Render(summary.mark)+" ", titleStyle.Render(ansi.Hardwrap(clean(summary.title), width-gutter, true)))
 		if message.Cancelled {
 			rendered += "\n" + indentTool(m.theme.amber.Render(ansi.Hardwrap("Cancelled by client", width-2, true)), 2)
 		}
@@ -112,17 +257,31 @@ func (m *model) toolView(message store.Message, details bool, width int) string 
 		}
 		return rendered + "\n" + m.toolDetails(*tool, width) + m.fileChanges(message, width) + "\n"
 	}
-	rendered := markStyle.Render(summary.mark+" ") + titleStyle.Bold(true).Render(line(summary.title, width-2))
-	for _, diff := range summary.diffs {
-		style := m.theme.accent
-		switch diff.label {
-		case "created":
-			style = m.theme.mint
-		case "deleted":
-			style = m.theme.danger
+	rendered := markStyle.Render(summary.mark) + " " + titleStyle.Render(line(summary.title, width-gutter))
+	child := 0
+	connector := func() string {
+		child++
+		if child == 1 {
+			return m.theme.dim.Render("  └ ")
 		}
-		row := m.theme.cyan.Render(diff.path) + m.theme.muted.Render(" · ") + style.Render(diff.label) + m.theme.muted.Render(" · Ctrl+O for diff")
-		rendered += "\n  " + ansi.Truncate(row, width-2, "…")
+		return "    "
+	}
+	for _, diff := range summary.diffs {
+		path := displayPath(diff.path, m.options.Cwd)
+		meta := m.theme.muted.Render(" · " + diff.label)
+		if counts := m.diffCounts(diff.added, diff.removed); diff.counted && counts != "" {
+			meta += "  " + counts
+		}
+		// Keep the end of the path: the file name is the useful part.
+		row := m.hintKey().Render(truncateLeft(path, max(8, width-4-ansi.StringWidth(meta))))
+		rendered += "\n" + connector() + ansi.Truncate(row+meta, width-4, "…")
+	}
+	previewStyle := m.theme.dim
+	if summary.failed {
+		previewStyle = m.theme.danger
+	}
+	for _, row := range summary.preview {
+		rendered += "\n" + connector() + previewStyle.Render(line(row, width-4))
 	}
 	return rendered
 }
@@ -150,11 +309,11 @@ func (m *model) toolDetails(tool schema.ToolCall, width int) string {
 	}
 	var locations []string
 	for _, location := range tool.Locations {
-		path := location.Path
+		path := displayPath(location.Path, m.options.Cwd)
 		if location.Line != nil {
 			path += fmt.Sprintf(":%d", *location.Line)
 		}
-		locations = append(locations, m.theme.cyan.Render(ansi.Hardwrap(clean(path), w, true)))
+		locations = append(locations, m.theme.cyan.Render(ansi.Hardwrap(path, w, true)))
 	}
 	section("Files", strings.Join(locations, "\n"))
 	section("Input", m.toolRaw(tool.RawInput, w))
@@ -179,10 +338,17 @@ func (m *model) toolDetails(tool schema.ToolCall, width int) string {
 				from = "/dev/null"
 			}
 			patch := udiff.Unified(clean(from), clean(d.Path), clean(old), clean(d.NewText))
-			if patch == "" {
-				patch = "No textual changes"
+			body := m.theme.muted.Render("No textual changes")
+			if patch != "" {
+				body = m.diffView(patch, w)
 			}
-			section("Changes · "+line(d.Path, w-10), m.toolLines(strings.TrimSuffix(patch, "\n"), w, true))
+			label := "Changes · " + truncateLeft(displayPath(d.Path, m.options.Cwd), max(8, w-10))
+			if counts := m.diffCounts(patchStat(patch)); counts != "" {
+				label = m.theme.muted.Bold(true).Render(label) + "  " + counts
+				sections = append(sections, "  "+label+"\n"+indentTool(body, 4))
+				continue
+			}
+			section(label, body)
 		case part.Terminal != nil:
 			section("Terminal", m.theme.amber.Render(ansi.Hardwrap(clean(string(part.Terminal.TerminalID)), w, true)))
 		}
@@ -200,16 +366,102 @@ func (m *model) fileChanges(message store.Message, width int) string {
 	w := max(1, width-4)
 	var rows []string
 	for _, change := range message.Changes {
-		rows = append(rows, m.theme.cyan.Render(ansi.Hardwrap(clean(change.Path), w, true))+m.theme.muted.Render(" · "+clean(change.Label())))
+		rows = append(rows, m.theme.cyan.Render(ansi.Hardwrap(displayPath(change.Path, m.options.Cwd), w, true))+m.theme.muted.Render(" · "+clean(change.Label())))
 	}
 	body := strings.Join(rows, "\n")
 	if message.Patch != "" {
 		if body != "" {
 			body += "\n"
 		}
-		body += m.toolLines(strings.TrimSuffix(message.Patch, "\n"), w, true)
+		body += m.diffView(strings.TrimSuffix(message.Patch, "\n"), w)
 	}
-	return "\n\n  " + m.theme.muted.Bold(true).Render("Changes") + "\n" + indentTool(body, 4)
+	label := m.theme.muted.Bold(true).Render("Changes")
+	if counts := m.diffCounts(patchStat(message.Patch)); counts != "" {
+		label += "  " + counts
+	}
+	return "\n\n  " + label + "\n" + indentTool(body, 4)
+}
+
+// diffView renders a unified patch with line numbers and tinted added and
+// removed rows, like a code review. File headers are dropped because the
+// section label already names the file.
+func (m *model) diffView(patch string, width int) string {
+	parsed := parsePatch(clean(patch))
+	widest := 1
+	for _, row := range parsed {
+		widest = max(widest, row.number)
+	}
+	digits := len(strconv.Itoa(widest))
+	content := max(1, width-digits-3)
+	// Without background tints, color the changed text itself instead.
+	add, del := on(m.theme.addBg), on(m.theme.delBg)
+	tinted := m.theme.addBg != nil
+	if !tinted {
+		add, del = m.theme.mint, m.theme.danger
+	}
+	var out []string
+	for i, row := range parsed {
+		switch row.kind {
+		case '@':
+			if i > 0 && len(out) > 0 {
+				out = append(out, m.theme.dim.Render(strings.Repeat(" ", digits)+" ⋮"))
+			}
+			continue
+		case 0:
+			out = append(out, m.theme.dim.Render(ansi.Truncate(row.text, width, "…")))
+			continue
+		}
+		var tint *lipgloss.Style
+		signStyle := m.theme.dim
+		switch row.kind {
+		case '+':
+			tint, signStyle = &add, m.theme.mint.Inherit(add)
+		case '-':
+			tint, signStyle = &del, m.theme.danger.Inherit(del)
+		}
+		// Long lines wrap under a blank gutter so the numbers stay aligned.
+		for j, piece := range strings.Split(ansi.Hardwrap(row.text, content, true), "\n") {
+			number, sign := fmt.Sprintf("%*d", digits, row.number), string(row.kind)
+			if j > 0 {
+				number, sign = strings.Repeat(" ", digits), " "
+			}
+			prefix := m.theme.dim.Render(number) + " "
+			if tint == nil {
+				out = append(out, prefix+m.theme.dim.Render(sign+" ")+piece)
+				continue
+			}
+			fill := ""
+			if tinted {
+				fill = strings.Repeat(" ", max(0, content-ansi.StringWidth(piece)))
+			}
+			out = append(out, prefix+signStyle.Render(sign+" ")+tint.Render(piece+fill))
+		}
+	}
+	return strings.Join(out, "\n")
+}
+
+// parseHunk reads "@@ -a,b +c,d @@" as [a, b, c, d]; omitted sizes are 1.
+func parseHunk(row string) ([4]int, bool) {
+	var hunk [4]int
+	fields := strings.Fields(row)
+	if len(fields) < 3 || !strings.HasPrefix(fields[1], "-") || !strings.HasPrefix(fields[2], "+") {
+		return hunk, false
+	}
+	for i, field := range fields[1:3] {
+		start, size, found := strings.Cut(field[1:], ",")
+		a, err := strconv.Atoi(start)
+		if err != nil {
+			return hunk, false
+		}
+		b := 1
+		if found {
+			if b, err = strconv.Atoi(size); err != nil {
+				return hunk, false
+			}
+		}
+		hunk[i*2], hunk[i*2+1] = a, b
+	}
+	return hunk, true
 }
 
 func indentTool(text string, spaces int) string {

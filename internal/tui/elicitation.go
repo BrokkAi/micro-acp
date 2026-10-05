@@ -51,9 +51,9 @@ func (m *model) nextElicitation() tea.Cmd {
 			continue
 		default:
 		}
-		ui := &elicitationUI{event: e, values: map[string]string{}, input: textinput.New(), action: 2}
-		ui.input.SetWidth(max(10, m.width-8))
+		ui := &elicitationUI{event: e, values: map[string]string{}, input: m.textInput(), action: 2}
 		ui.input.CharLimit = 8192
+		ui.input.Placeholder = "Type an answer…"
 		if e.Schema != nil {
 			var err error
 			ui.fields, err = forms.Fields(*e.Schema)
@@ -229,20 +229,25 @@ func (m *model) elicitationView() string { return m.elicitationPanel(max(20, m.h
 // Keep the active field and action choices visible; only explanatory context scrolls.
 func (m *model) elicitationPanel(height int) string {
 	e := m.elicitation
-	w := max(10, m.width-4)
+	w := m.lineWidth()
 	context := clean(e.event.Request.Message)
 	if e.event.URL != "" {
 		u, _ := url.Parse(e.event.URL)
 		context += "\nOpen in your browser: " + clean(u.Host) + "\n" + clean(e.event.URL)
 	}
+	step := ""
 	var controls []string
 	if e.index < len(e.fields) {
 		f := e.fields[e.index]
-		required := "optional"
+		required := m.theme.dim.Render("  optional")
 		if f.Required {
-			required = "required"
+			required = m.theme.danger.Render(" *")
 		}
-		controls = append(controls, line(fmt.Sprintf("%d/%d · %s (%s)", e.index+1, len(e.fields), f.Title, required), w))
+		if len(e.fields) > 1 {
+			step = fmt.Sprintf("%d/%d", e.index+1, len(e.fields))
+		}
+		title := line(f.Title, max(1, w-gutter-ansi.StringWidth(required)))
+		controls = append(controls, "  "+m.hintKey().Bold(true).Render(title)+required)
 		if f.Description != "" {
 			context += "\n" + clean(f.Description)
 		}
@@ -255,10 +260,10 @@ func (m *model) elicitationPanel(height int) string {
 			for _, o := range f.Options {
 				label := o.Label
 				if f.Kind == "array" {
-					mark := "[ ] "
+					mark := "○ "
 					for _, v := range selected {
 						if v == o.Value {
-							mark = "[x] "
+							mark = "✓ "
 						}
 					}
 					label = mark + label
@@ -269,42 +274,48 @@ func (m *model) elicitationPanel(height int) string {
 		} else {
 			controls = append(controls, e.input.View())
 		}
-		hint := "Enter next · Esc cancel · PgUp/PgDn details · Shift+Tab back · Ctrl+X skip · Ctrl+D decline"
+		hints := []string{"enter", "next", "esc", "cancel", "shift+tab", "back", "ctrl+x", "skip", "ctrl+d", "decline", "pgup/pgdn", "details"}
 		if f.Kind == "array" {
-			hint = "Space toggle · " + hint
+			hints = append([]string{"space", "toggle"}, hints...)
 		}
-		controls = append(controls, m.theme.muted.Render(line(hint, w)))
+		controls = append(controls, m.hints(w, hints...))
 	} else {
+		step = "review"
 		if len(e.fields) > 0 {
-			context += "\nReview your responses (Shift+Tab to edit):"
+			labelWidth := 0
 			for _, f := range e.fields {
-				context += "\n" + clean(f.Title) + ": " + clean(e.values[f.Name])
+				labelWidth = max(labelWidth, ansi.StringWidth(clean(f.Title)))
+			}
+			labelWidth = min(labelWidth, max(1, w/3))
+			context += "\n" + m.theme.dim.Render("Review your answers · shift+tab to edit")
+			for _, f := range e.fields {
+				title := line(f.Title, labelWidth)
+				context += "\n" + m.theme.muted.Render(title+strings.Repeat(" ", labelWidth-ansi.StringWidth(title)+2)) + clean(e.values[f.Name])
 			}
 		}
 		label := "Submit"
 		if e.event.URL != "" {
 			label = "Submit / open URL"
 		}
-		for i, text := range []string{label, "Decline", "Cancel"} {
-			prefix := "  "
-			if e.action == i {
-				prefix = "› "
-			}
-			controls = append(controls, line(prefix+text, w))
-		}
-		controls = append(controls, m.theme.muted.Render(line("Enter confirm · Esc cancel · PgUp/PgDn details", w)))
+		actions := []item{{title: label}, {title: "Decline"}, {title: "Cancel"}}
+		controls = append(controls, m.suggestionRows(actions, e.action, w, len(actions), false))
+		controls = append(controls, m.hints(w, "↑↓", "choose", "enter", "confirm", "esc", "cancel", "pgup/pgdn", "details"))
 	}
 	if e.err != "" {
-		controls = append(controls, m.theme.danger.Render(line(e.err, w)))
+		controls = append(controls, hang(m.theme.danger.Render("×")+" ", m.theme.danger.Render(line(e.err, w-gutter))))
 	}
 	body := strings.Join(controls, "\n")
-	context = ansi.Wrap(context, w, "")
+	context = hang("  ", ansi.Wrap(strings.TrimSpace(context), w-gutter, ""))
 	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(context)), max(1, height-lipgloss.Height(body)-1))))
 	v.SetContent(context)
 	v.SetYOffset(m.interactionOffset)
-	header := "INPUT REQUEST · " + e.event.Agent
+	header := "Input request · " + e.event.Agent
 	if e.event.Subagent != "" {
 		header += " · " + subagentMark + " " + e.event.Subagent
 	}
-	return m.theme.accent.Bold(true).Render(line(header, w)) + "\n" + v.View() + "\n" + body
+	spacer := ""
+	if height > 1+v.Height()+lipgloss.Height(body) {
+		spacer = "\n"
+	}
+	return m.titleRule(header, step, w, m.theme.accent.Bold(true)) + "\n" + v.View() + "\n" + spacer + body
 }

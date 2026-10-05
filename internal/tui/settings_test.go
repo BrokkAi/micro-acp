@@ -81,7 +81,7 @@ func TestConfigurationStatusPersistsDuringWorkAndErrors(t *testing.T) {
 			m.lastError = "test error"
 		}
 		view := m.View().Content
-		for _, want := range []string{"demo", "Walkthrough", "✓ Stream words", "/config"} {
+		for _, want := range []string{"demo", "Walkthrough", "● Stream words", "/config"} {
 			if !strings.Contains(view, want) {
 				t.Fatalf("%s lost %q:\n%s", state, want, view)
 			}
@@ -107,7 +107,7 @@ func TestConfigurationStatusResponsiveAndExplicitOverflow(t *testing.T) {
 		if width == 31 && !strings.Contains(view, "more") {
 			t.Fatal("overflow was silently hidden")
 		}
-		if width == 116 && (!strings.Contains(view, "✓ Review") || !strings.Contains(view, "○ Streaming") || !strings.Contains(view, "Fast")) {
+		if width == 116 && (!strings.Contains(view, "● Review") || !strings.Contains(view, "○ Streaming") || !strings.Contains(view, "Fast")) {
 			t.Fatal("nonstandard settings missing")
 		}
 		if strings.Contains(view, "Model Example") || strings.Contains(view, "Reasoning High") || strings.Contains(view, "Mode Ask") {

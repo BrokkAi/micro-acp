@@ -43,7 +43,7 @@ Terminal authentication is a separate process flow rather than an `authenticate`
 | `agent_thought_chunk` | Compact thinking entries; full text in Ctrl+O details. |
 | `tool_call` | Compact title/status and file-change summary; Ctrl+O exposes kind, name, inputs, content, file locations and outputs. |
 | `tool_call_update` | Merges partial updates without discarding omitted fields; null raw input/output preserves prior values, while explicit empty lists replace them. |
-| `plan` | Live checklist above the prompt with status markers, priorities and completion counts. Long plans follow the active step; Ctrl+O retains full update history. |
+| `plan` | Live checklist above the prompt with status markers, high-priority markers and a completion count; between turns it shrinks to the count. Long plans follow the active step; Ctrl+O retains full update history with every priority. |
 | `available_commands_update` | Refreshes inline slash suggestions; resolves client command collisions through `/agent`. |
 | `current_mode_update` | Updates the current legacy mode. |
 | `config_option_update` | Refreshes open selectors, completions, and the persistent status line, including custom options, On/Off values, and model-dependent choices. |

@@ -38,7 +38,7 @@ func TestToolDetailsThroughACPAndKeyboard(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.syncTranscript()
-	if compact := strings.Join(m.printQueue, "\n"); !strings.Contains(compact, m.theme.amber.Bold(true).Render("Run checks")) || strings.Contains(compact, "exitCode") {
+	if compact := strings.Join(m.printQueue, "\n"); !strings.Contains(compact, m.hintKey().Bold(true).Render("Run checks")) || strings.Contains(compact, "exitCode") {
 		t.Fatalf("compact transcript is unstyled or expanded:\n%s", compact)
 	}
 	m.input.SetValue("keep this draft")
@@ -106,20 +106,20 @@ func TestToolDetailsRenderContentAndUnifiedDiff(t *testing.T) {
 	message := toolMessage(t, `{"toolCallId":"edit","title":"Update greeting","kind":"edit","status":"completed","content":[{"type":"diff","path":"main.go","oldText":"package main\n\nvar greeting = \"old\"\n","newText":"package main\n\nvar greeting = \"new\"\n"},{"type":"content","content":{"type":"text","text":"{\"summary\":\"Updated greeting\",\"count\":1}"}},{"type":"content","content":{"type":"image","mimeType":"image/png","data":"secret-base64"}},{"type":"terminal","terminalId":"term-1"}]}`)
 	rendered := m.messageView(message, true, false)
 	text := ansi.Strip(rendered)
-	for _, want := range []string{"Changes · main.go", "--- main.go", "+++ main.go", "@@", " package main", `-var greeting = "old"`, `+var greeting = "new"`, "summary: Updated greeting", "count: 1", "[image: image/png]", "Terminal", "term-1"} {
+	for _, want := range []string{"Changes · main.go  +1 -1", "1   package main", `3 - var greeting = "old"`, `3 + var greeting = "new"`, "summary: Updated greeting", "count: 1", "[image: image/png]", "Terminal", "term-1"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "secret-base64") || strings.Contains(text, "-package main") || strings.Contains(text, "+package main") {
-		t.Fatalf("binary data exposed or unchanged lines marked as edits:\n%s", text)
+	if strings.Contains(text, "secret-base64") || strings.Contains(text, "- package main") || strings.Contains(text, "+ package main") || strings.Contains(text, "+++") || strings.Contains(text, "@@") {
+		t.Fatalf("binary data exposed, unchanged lines marked as edits, or raw patch headers shown:\n%s", text)
 	}
-	if !strings.Contains(rendered, m.theme.mint.Render(`+var greeting = "new"`)) || !strings.Contains(rendered, m.theme.danger.Render(`-var greeting = "old"`)) {
+	if !strings.Contains(rendered, m.theme.mint.Inherit(on(m.theme.addBg)).Render("+ ")) || !strings.Contains(rendered, m.theme.danger.Inherit(on(m.theme.delBg)).Render("- ")) {
 		t.Fatal("diff additions and removals lack distinct colors")
 	}
 	compact := m.messageView(message, false, false)
-	if strings.Contains(compact, "greeting =") || !strings.Contains(compact, m.theme.cyan.Render("main.go")) {
-		t.Fatalf("compact view lost colored file summary: %s", compact)
+	if strings.Contains(compact, "greeting =") || !strings.Contains(compact, m.hintKey().Render("main.go")) || !strings.Contains(ansi.Strip(compact), "main.go · updated  +1 -1") {
+		t.Fatalf("compact view lost the file summary: %s", compact)
 	}
 }
 
@@ -127,26 +127,28 @@ func TestToolPresentationColorsKindsAndStates(t *testing.T) {
 	for _, dark := range []bool{true, false} {
 		m := newModel(context.Background(), Options{})
 		m.applyTheme(dark)
+		// Status lives in the mark; titles stay neutral whatever the kind.
 		for _, tt := range []struct {
 			kind, status string
 			cancelled    bool
-			style        lipgloss.Style
+			mark         string
+			markStyle    lipgloss.Style
 		}{
-			{"read", "completed", false, m.theme.cyan},
-			{"execute", "in_progress", false, m.theme.amber},
-			{"edit", "completed", false, m.theme.accent},
-			{"delete", "pending", false, m.theme.danger},
-			{"read", "failed", false, m.theme.danger},
-			{"execute", "in_progress", true, m.theme.amber},
+			{"read", "completed", false, "✓", m.theme.mint},
+			{"execute", "in_progress", false, "◦", m.theme.muted},
+			{"edit", "completed", false, "✓", m.theme.mint},
+			{"delete", "pending", false, "◦", m.theme.muted},
+			{"read", "failed", false, "×", m.theme.danger},
+			{"execute", "in_progress", true, "×", m.theme.amber},
 		} {
 			message := toolMessage(t, fmt.Sprintf(`{"toolCallId":"test","title":"Work","kind":%q,"status":%q}`, tt.kind, tt.status))
 			message.Cancelled = tt.cancelled
-			title := "Work"
+			title := m.hintKey().Bold(true).Render("Work")
 			if tt.cancelled {
-				title += " · cancelled"
+				title = m.theme.amber.Render("Work · cancelled")
 			}
-			if got := m.messageView(message, false, false); !strings.Contains(got, tt.style.Bold(true).Render(title)) {
-				t.Errorf("dark=%v kind=%s status=%s: missing title color: %q", dark, tt.kind, tt.status, got)
+			if got := m.messageView(message, false, false); !strings.Contains(got, tt.markStyle.Render(tt.mark)+" "+title) {
+				t.Errorf("dark=%v kind=%s status=%s: wrong mark or title style: %q", dark, tt.kind, tt.status, got)
 			}
 		}
 	}

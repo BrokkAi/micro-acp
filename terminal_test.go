@@ -180,11 +180,11 @@ func TestTerminalWorkflow(t *testing.T) {
 	waitSessions := func(n int) { t.Helper(); wait("session count", func(string) bool { return len(sessions()) == n }) }
 
 	contains("Walkthrough")
-	contains("✓ Stream words")
+	contains("● Stream words")
 	contains("/config")
 	// Session settings arrive before the UI handles the operation's result.
 	// Commands remain disabled until the busy indicator disappears.
-	wait("session ready for commands", func(s string) bool { return !strings.Contains(s, "Esc stop") })
+	wait("session ready for commands", func(s string) bool { return !strings.Contains(s, "esc to interrupt") })
 	send("/config\r")
 	contains("Session configuration")
 	contains("On · stream")
@@ -197,7 +197,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("off\r")
 	contains("○ Stream words")
 	send("/settings stream true\r")
-	contains("✓ Stream words")
+	contains("● Stream words")
 	send("/mo")
 	contains("/model")
 	contains("/mode")
@@ -209,7 +209,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	wait("one Enter selects; old menu erased", func(s string) bool {
 		return strings.Contains(s, "Brief") && !strings.Contains(s, "Type to search")
 	})
-	if strings.Count(screen(), "micro-acp  ·") != 1 {
+	if strings.Count(screen(), "demo · New session") != 1 {
 		t.Fatal("redraw duplicated committed output")
 	}
 	send("Review @ma")
@@ -236,7 +236,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("\r")
 	contains("cancelled")
 	send("form\r")
-	contains("INPUT REQUEST")
+	contains("Input request")
 	send("\r")
 	contains("2/2")
 	send("\r")
@@ -248,7 +248,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("queued followup\t")
 	contains("1 queued")
 	contains("Brief")
-	contains("✓ Stream words")
+	contains("● Stream words")
 	send("unsent draft\x1b[1;3A")
 	contains("Editing queued prompt")
 	contains("❯ queued followup")
@@ -258,7 +258,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	send("\x1b")
 	contains("Stopped")
 	contains("Brief")
-	contains("✓ Stream words")
+	contains("● Stream words")
 	contains("/queue send to continue")
 	send("/queue\r")
 	contains("Queued prompts")
@@ -301,7 +301,7 @@ func TestTerminalWorkflow(t *testing.T) {
 	emulator.Resize(35, 14)
 	send("/mode\r")
 	contains("Demo response")
-	contains("Enter select")
+	contains("enter choose")
 	send("\x1b")
 	wait("close mode selector", func(s string) bool { return !strings.Contains(s, "Type to search") })
 	send("/quit\r")

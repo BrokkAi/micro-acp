@@ -27,12 +27,12 @@ func TestSubagentRowsPickerAndTranscript(t *testing.T) {
 		t.Fatal("child permission never arrived")
 	}
 	m.syncTranscript()
-	if printed := ansi.Strip(strings.Join(m.printQueue, "\n")); !strings.Contains(printed, "⧉ Survey the workspace · waiting on you") {
+	if printed := ansi.Strip(strings.Join(m.printQueue, "\n")); !strings.Contains(printed, "◇ Survey the workspace · waiting on you") {
 		t.Fatalf("child row was not committed while it runs:\n%s", printed)
 	}
 	m.printQueue = nil
 	m.Update(p)
-	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "⧉ Survey the workspace · Let the subagent") {
+	if view := ansi.Strip(m.View().Content); !strings.Contains(view, "Permission required · ◇ Survey the workspace") || !strings.Contains(view, "Let the subagent") {
 		t.Fatalf("permission does not name the subagent:\n%s", view)
 	}
 	m.permissionChoice = 0
@@ -45,7 +45,7 @@ func TestSubagentRowsPickerAndTranscript(t *testing.T) {
 	m.busy, m.prompting = false, false
 	m.syncTranscript()
 	printed := ansi.Strip(strings.Join(m.printQueue, "\n"))
-	if !strings.Contains(printed, "⧉ Survey the workspace · done") || !strings.Contains(printed, "The subagent finished") {
+	if !strings.Contains(printed, "◇ Survey the workspace · done") || !strings.Contains(printed, "The subagent finished") {
 		t.Fatalf("child row was not reprinted with its final state:\n%s", printed)
 	}
 	if strings.Contains(printed, "Demo report") {

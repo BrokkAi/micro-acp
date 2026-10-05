@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/BrokkAi/micro-acp/internal/client"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type steeredMsg struct {
@@ -149,33 +150,37 @@ func (m *model) restoreQueueDraft() {
 func (m *model) queueView(width int) string {
 	var rows []string
 	if m.steering != nil {
-		rows = append(rows, m.theme.amber.Render(line("› Sending guidance: "+m.steering.text, width)))
+		rows = append(rows, m.theme.amber.Render("› ")+m.theme.amber.Render("Sending guidance ")+m.theme.muted.Render(line(strings.Join(strings.Fields(m.steering.text), " "), max(1, width-19))))
 	}
 	if m.editing != nil {
-		rows = append(rows, m.theme.amber.Render(line("Editing queued prompt · Enter save · Esc restore", width)))
+		rows = append(rows, m.theme.amber.Render("Editing queued prompt")+m.theme.dim.Render(" · ")+m.hints(max(1, width-24), "enter", "save", "esc", "restore"))
 	}
 	if len(m.queued) > 0 {
-		header := fmt.Sprintf("%d queued · Alt+↑ edit last · /queue", len(m.queued))
+		count := fmt.Sprintf("%d queued", len(m.queued))
+		header := m.hintKey().Render("» "+count) + m.theme.dim.Render(" · ")
 		if m.queuePaused {
-			header = fmt.Sprintf("%d queued · /queue send to continue", len(m.queued))
+			header += m.hints(max(1, width-len(count)-5), "/queue send", "to continue")
+		} else {
+			header += m.hints(max(1, width-len(count)-5), "alt+↑", "edit last", "/queue", "manage")
 		}
-		rows = append(rows, m.theme.muted.Render(line(header, width)))
+		rows = append(rows, header)
 		limit := min(3, max(1, m.height/8))
-		for i, q := range m.queued[:min(limit, len(m.queued))] {
+		for _, q := range m.queued[:min(limit, len(m.queued))] {
 			label := strings.Join(strings.Fields(q.text), " ")
 			if label == "" {
 				label = "Attached context"
 			}
-			if q.steer {
-				label = "steer · " + label
+			tag := ""
+			switch {
+			case q.deliveryError != "":
+				tag = m.theme.danger.Render("check delivery · ")
+			case q.steer:
+				tag = m.theme.amber.Render("steer · ")
 			}
-			if q.deliveryError != "" {
-				label = "check delivery · " + label
-			}
-			rows = append(rows, m.theme.cyan.Render(fmt.Sprintf("  %d ", i+1))+line(label, width-4))
+			rows = append(rows, m.theme.dim.Render("  ↳ ")+tag+m.theme.muted.Render(line(label, max(1, width-4-ansi.StringWidth(ansi.Strip(tag))))))
 		}
 		if len(m.queued) > limit {
-			rows = append(rows, m.theme.muted.Render(fmt.Sprintf("  +%d more", len(m.queued)-limit)))
+			rows = append(rows, m.theme.dim.Render(fmt.Sprintf("    +%d more", len(m.queued)-limit)))
 		}
 	}
 	return strings.Join(rows, "\n")
