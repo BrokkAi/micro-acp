@@ -27,14 +27,18 @@ import (
 
 type Permission struct {
 	Request schema.RequestPermissionRequest
-	Reply   chan schema.RequestPermissionOutcome
-	Done    <-chan struct{}
+	// Subagent names the child session asking, or is empty for the session itself.
+	Subagent string
+	Reply    chan schema.RequestPermissionOutcome
+	Done     <-chan struct{}
 }
 
 type Client struct {
 	Agent, Cwd string
 	Init       acp.Initialization
 	CanFork    bool
+	// Subagents reports that the agent advertised subagent sessions.
+	Subagents bool
 	// Ephemeral suppresses local session persistence for headless runs. Set it
 	// before creating or loading a session.
 	Ephemeral        bool
@@ -165,9 +169,14 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 	}
 	terminalAuth := true
 	caps.Auth = &schema.AuthCapabilities{Terminal: &terminalAuth}
-	err = c.conn.Call(setup, schema.InitializeMethodName, schema.InitializeRequest{
-		ProtocolVersion: acp.Version, ClientCapabilities: &caps,
-		ClientInfo: &schema.Implementation{Name: "micro-acp", Version: buildinfo.Version},
+	// Subagent sessions are unstable, so the stable capability type omits them.
+	var extendedCaps unstable.ClientCapabilities
+	b, _ := json.Marshal(caps)
+	_ = json.Unmarshal(b, &extendedCaps)
+	extendedCaps.Subagents = &unstable.SubagentCapabilities{}
+	err = c.conn.Call(setup, schema.InitializeMethodName, unstable.InitializeRequest{
+		ProtocolVersion: unstable.ProtocolVersion(acp.Version), ClientCapabilities: &extendedCaps,
+		ClientInfo: &unstable.Implementation{Name: "micro-acp", Version: buildinfo.Version},
 	}, &raw)
 	if err == nil {
 		err = json.Unmarshal(raw, &c.Init)
@@ -182,6 +191,16 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 	var extended unstable.InitializeResponse
 	if json.Unmarshal(raw, &extended) == nil && extended.AgentCapabilities != nil && extended.AgentCapabilities.SessionCapabilities != nil {
 		c.CanFork = extended.AgentCapabilities.SessionCapabilities.Fork != nil
+	}
+	var subagents struct {
+		AgentCapabilities struct {
+			SessionCapabilities struct {
+				Subagents json.RawMessage `json:"subagents"`
+			} `json:"sessionCapabilities"`
+		} `json:"agentCapabilities"`
+	}
+	if json.Unmarshal(raw, &subagents) == nil {
+		c.Subagents = hasJSONValue(subagents.AgentCapabilities.SessionCapabilities.Subagents)
 	}
 	return c, nil
 }
@@ -218,9 +237,7 @@ func (c *Client) Diagnostics() string {
 func (c *Client) Snapshot() (store.Session, uint64) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	s := c.current
-	s.Messages = append([]store.Message(nil), s.Messages...)
-	return s, c.revision
+	return c.current.Clone(), c.revision
 }
 func (c *Client) Save() error {
 	if c.Ephemeral {
@@ -334,6 +351,9 @@ func (c *Client) Load(s store.Session) error {
 	}
 	if !resume {
 		s.Messages = nil
+		s.Subagents = nil
+	} else {
+		s.Subagents = staleSubagents(s.Subagents)
 	}
 	c.set(s, w)
 	c.mu.Lock()
@@ -357,8 +377,10 @@ func (c *Client) Load(s store.Session) error {
 		return err
 	}
 	s, _ = c.Snapshot()
-	if len(s.Messages) == 0 {
+	if len(s.Messages) == 0 && len(s.Subagents) == 0 {
 		s.Messages = backup.Messages
+		s.Subagents = backup.Subagents
+		s.Subagents = staleSubagents(s.Subagents)
 	}
 	s.UpdatedAt = time.Now().UTC()
 	c.set(s, w)
@@ -384,7 +406,10 @@ func (c *Client) Fork(contextOnly bool) error {
 	s.Title = parent.Title + " (fork)"
 	s.ParentID = parent.ID
 	s.AdditionalDirectories = append([]string(nil), parent.AdditionalDirectories...)
-	s.Messages = append([]store.Message(nil), parent.Messages...)
+	s.Messages = parent.Messages
+	s.Subagents = parent.Subagents
+	s = s.Clone()
+	s.Subagents = staleSubagents(s.Subagents)
 	s.Commands = parent.Commands
 	s.ForkKind = "native"
 	if contextOnly {
@@ -403,6 +428,7 @@ func (c *Client) Fork(contextOnly bool) error {
 	previousWire := c.session()
 	if !contextOnly {
 		s.Messages = nil
+		s.Subagents = nil
 		c.mu.Lock()
 		c.replaying = true
 		c.mu.Unlock()
@@ -432,9 +458,11 @@ func (c *Client) Fork(contextOnly bool) error {
 		return errors.New("agent returned an empty fork session ID")
 	}
 	s, _ = c.Snapshot()
-	if !contextOnly && len(s.Messages) == 0 {
+	if !contextOnly && len(s.Messages) == 0 && len(s.Subagents) == 0 {
 		// Some agents fork their internal state without replaying history.
-		s.Messages = append([]store.Message(nil), parent.Messages...)
+		inherited := parent.Clone()
+		s.Messages, s.Subagents = inherited.Messages, inherited.Subagents
+		s.Subagents = staleSubagents(s.Subagents)
 	}
 	s.RemoteID = string(w.SessionID)
 	c.set(s, w)

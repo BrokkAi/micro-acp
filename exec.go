@@ -45,6 +45,36 @@ type execResult struct {
 	StopReason string              `json:"stop_reason"`
 	Text       string              `json:"text"`
 	Usage      *schema.UsageUpdate `json:"usage,omitempty"`
+	Subagents  []execSubagent      `json:"subagents,omitempty"`
+}
+
+// execSubagent is a child session that had activity during this turn.
+type execSubagent struct {
+	ID          string `json:"id"`
+	ParentID    string `json:"parent_id"`
+	Title       string `json:"title,omitempty"`
+	Description string `json:"description,omitempty"`
+	State       string `json:"state,omitempty"`
+	StopReason  string `json:"stop_reason,omitempty"`
+	Text        string `json:"text"`
+}
+
+// turnSubagents returns the children that started or wrote output after the
+// given starting snapshot, with the assistant text they added.
+func turnSubagents(start, end store.Session) []execSubagent {
+	var children []execSubagent
+	for _, child := range end.Subagents {
+		base := 0
+		previous, existed := start.Subagent(child.ID)
+		if existed {
+			base = min(len(previous.Messages), len(child.Messages))
+			if base == len(child.Messages) && previous.State == child.State && previous.StopReason == child.StopReason {
+				continue
+			}
+		}
+		children = append(children, execSubagent{ID: child.ID, ParentID: child.ParentID, Title: child.Title, Description: child.Description, State: child.State, StopReason: child.StopReason, Text: assistantText(child.Messages[base:])})
+	}
+	return children
 }
 
 // runExec drives one prompt headlessly. It never opens the TUI and does not
@@ -190,7 +220,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 	var stream *execStreamer
 	stopStream := make(chan struct{})
 	if opts.Format == "stream-json" {
-		stream = newExecStreamer(out, base)
+		stream = newExecStreamer(out, start)
 		go func() {
 			ticker := time.NewTicker(80 * time.Millisecond)
 			defer ticker.Stop()
@@ -218,6 +248,7 @@ func runExec(ctx context.Context, opts execOptions, args []string, out, errOut i
 		StopReason: string(reason),
 		Text:       assistantText(snapshot.Messages[base:]),
 		Usage:      snapshot.Usage,
+		Subagents:  turnSubagents(start, snapshot),
 	}
 
 	if promptErr != nil {
@@ -318,16 +349,37 @@ func assistantText(messages []store.Message) string {
 
 // execStreamer turns the client's accumulating session snapshot into
 // newline-delimited JSON, emitting only the deltas since the last poll.
+// Events from a subagent carry its session ID in "subagent".
 type execStreamer struct {
-	out  io.Writer
-	mu   sync.Mutex
+	out      io.Writer
+	mu       sync.Mutex
+	start    store.Session
+	root     *execTranscript
+	children map[string]*execTranscript
+	states   map[string]string
+}
+
+// execTranscript tracks what was already emitted for one session.
+type execTranscript struct {
 	base int
 	seen []string
 	tool map[string]string
 }
 
-func newExecStreamer(out io.Writer, base int) *execStreamer {
-	return &execStreamer{out: out, base: base, seen: make([]string, base), tool: map[string]string{}}
+func newExecTranscript(base int) *execTranscript {
+	return &execTranscript{base: base, seen: make([]string, base), tool: map[string]string{}}
+}
+
+func subagentState(child store.Subagent) string {
+	return child.Title + "\x00" + child.Description + "\x00" + child.State + "\x00" + child.StopReason
+}
+
+func newExecStreamer(out io.Writer, start store.Session) *execStreamer {
+	s := &execStreamer{out: out, start: start, root: newExecTranscript(len(start.Messages)), children: map[string]*execTranscript{}, states: map[string]string{}}
+	for _, child := range start.Subagents {
+		s.states[child.ID] = subagentState(child)
+	}
+	return s
 }
 
 func (s *execStreamer) emit(value any) {
@@ -342,26 +394,56 @@ func (s *execStreamer) poll(c *client.Client) {
 	snapshot, _ := c.Snapshot()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for i, message := range snapshot.Messages {
-		if i < s.base {
+	s.stream(s.root, snapshot.Messages, "")
+	for _, child := range snapshot.Subagents {
+		if state := subagentState(child); s.states[child.ID] != state {
+			s.states[child.ID] = state
+			s.emit(map[string]any{"type": "subagent", "id": child.ID, "parent_id": child.ParentID, "title": child.Title, "description": child.Description, "state": child.State, "stop_reason": child.StopReason})
+		}
+		t := s.children[child.ID]
+		if t == nil {
+			base := 0
+			if previous, ok := s.start.Subagent(child.ID); ok {
+				base = len(previous.Messages)
+			}
+			t = newExecTranscript(base)
+			s.children[child.ID] = t
+		}
+		s.stream(t, child.Messages, child.ID)
+	}
+}
+
+func (s *execStreamer) stream(t *execTranscript, messages []store.Message, subagent string) {
+	emit := func(event map[string]any) {
+		if subagent != "" {
+			event["subagent"] = subagent
+		}
+		s.emit(event)
+	}
+	for i, message := range messages {
+		if i < t.base {
 			continue
 		}
-		for len(s.seen) <= i {
-			s.seen = append(s.seen, "")
+		for len(t.seen) <= i {
+			t.seen = append(t.seen, "")
 		}
 		switch message.Role {
-		case "assistant", "thought":
-			previous := s.seen[i]
+		case "assistant", "thought", "message":
+			previous := t.seen[i]
 			if strings.HasPrefix(message.Text, previous) && len(message.Text) > len(previous) {
-				s.emit(map[string]any{"type": message.Role, "text": message.Text[len(previous):]})
-				s.seen[i] = message.Text
+				event := map[string]any{"type": message.Role, "text": message.Text[len(previous):]}
+				if message.Role == "message" {
+					event["from"], event["to"] = message.Sender, message.Recipient
+				}
+				emit(event)
+				t.seen[i] = message.Text
 			}
 		case "tool":
 			key := message.ID
 			if key == "" {
 				key = fmt.Sprintf("#%d", i)
 			}
-			if s.tool[key] == message.Text {
+			if t.tool[key] == message.Text {
 				continue
 			}
 			event := map[string]any{"type": "tool", "id": message.ID}
@@ -374,12 +456,12 @@ func (s *execStreamer) poll(c *client.Client) {
 					event["status"] = string(*message.Tool.Status)
 				}
 			}
-			s.emit(event)
-			s.tool[key] = message.Text
+			emit(event)
+			t.tool[key] = message.Text
 		case "notice":
-			if s.seen[i] == "" {
-				s.emit(map[string]any{"type": "notice", "text": message.Text})
-				s.seen[i] = "1"
+			if t.seen[i] == "" {
+				emit(map[string]any{"type": "notice", "text": message.Text})
+				t.seen[i] = "1"
 			}
 		}
 	}

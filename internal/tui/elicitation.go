@@ -302,5 +302,9 @@ func (m *model) elicitationPanel(height int) string {
 	v := viewport.New(viewport.WithWidth(w), viewport.WithHeight(min(max(1, lipgloss.Height(context)), max(1, height-lipgloss.Height(body)-1))))
 	v.SetContent(context)
 	v.SetYOffset(m.interactionOffset)
-	return m.theme.accent.Bold(true).Render(line("INPUT REQUEST · "+e.event.Agent, w)) + "\n" + v.View() + "\n" + body
+	header := "INPUT REQUEST · " + e.event.Agent
+	if e.event.Subagent != "" {
+		header += " · " + subagentMark + " " + e.event.Subagent
+	}
+	return m.theme.accent.Bold(true).Render(line(header, w)) + "\n" + v.View() + "\n" + body
 }

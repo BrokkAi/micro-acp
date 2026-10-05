@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func (lateChunkAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptR
 		return schema.PromptResponse{}, err
 	}
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		awaitLateGate()
 		tail := schema.ContentChunk{Content: acp.NewTextContent("tail flushed after the response")}
 		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewAgentMessageChunkUpdate(r.SessionID, tail))
 	}()
@@ -57,7 +58,7 @@ func (lateToolAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRe
 		return schema.PromptResponse{}, err
 	}
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		awaitLateGate()
 		completed := schema.ToolCallStatusCompleted
 		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewToolCallChangedUpdate(r.SessionID, schema.ToolCallUpdate{ToolCallID: "tool-1", Status: &completed}))
 	}()
@@ -75,7 +76,7 @@ func (lateKindAgent) Prompt(_ context.Context, c agent.Client, r schema.PromptRe
 		return schema.PromptResponse{}, err
 	}
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		awaitLateGate()
 		kind := schema.ToolKindExecute
 		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewToolCallChangedUpdate(r.SessionID, schema.ToolCallUpdate{ToolCallID: "tool-1", Kind: &kind}))
 	}()
@@ -97,11 +98,22 @@ func (lateOlderToolAgent) Prompt(_ context.Context, c agent.Client, r schema.Pro
 		return schema.PromptResponse{}, err
 	}
 	go func() {
-		time.Sleep(200 * time.Millisecond)
+		awaitLateGate()
 		completed := schema.ToolCallStatusCompleted
 		_ = c.Notify(context.Background(), schema.SessionUpdateMethodName, acp.NewToolCallChangedUpdate(r.SessionID, schema.ToolCallUpdate{ToolCallID: "tool-1", Status: &completed}))
 	}()
 	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
+}
+
+// awaitLateGate holds a late update until the test has checked the turn as
+// committed. A fixed delay raced the test on slow CI runners.
+func awaitLateGate() {
+	gate := os.Getenv("MICRO_ACP_LATE_GATE")
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(gate); err == nil {
+			return
+		}
+	}
 }
 
 func TestLateAgentProcess(t *testing.T) {
@@ -123,13 +135,16 @@ func TestLateAgentProcess(t *testing.T) {
 	}
 }
 
-func openLateAgentClient(t *testing.T, mode string) *client.Client {
+// openLateAgentClient returns a client and the function that lets the agent
+// send its late update.
+func openLateAgentClient(t *testing.T, mode string) (*client.Client, func()) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	t.Cleanup(cancel)
+	gate := filepath.Join(t.TempDir(), "release")
 	c, err := client.Open(ctx, "late", t.TempDir(), config.Command{
 		Command: os.Args[0], Args: []string{"-test.run=^TestLateAgentProcess$"},
-		Env: map[string]string{"MICRO_ACP_LATE_AGENT": mode},
+		Env: map[string]string{"MICRO_ACP_LATE_AGENT": mode, "MICRO_ACP_LATE_GATE": gate},
 	}, store.Store{Directory: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +153,12 @@ func openLateAgentClient(t *testing.T, mode string) *client.Client {
 	if err := c.New(); err != nil {
 		t.Fatal(err)
 	}
-	return c
+	release := func() {
+		if err := os.WriteFile(gate, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return c, release
 }
 
 func finishTurn(t *testing.T, m *model, c *client.Client) {
@@ -175,7 +195,7 @@ func TestLateChunkAfterPromptResponseIsPrinted(t *testing.T) {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "chunk")
+	c, release := openLateAgentClient(t, "chunk")
 	m.client = c
 	finishTurn(t, m, c)
 	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -184,6 +204,7 @@ func TestLateChunkAfterPromptResponseIsPrinted(t *testing.T) {
 	}
 	m.printQueue = nil
 
+	release()
 	waitForSnapshot(t, c, "tail flushed after the response")
 	m.syncTranscript()
 	late := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -205,7 +226,7 @@ func TestLateToolUpdateAfterPromptResponseIsReprinted(t *testing.T) {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "tool")
+	c, release := openLateAgentClient(t, "tool")
 	m.client = c
 	finishTurn(t, m, c)
 	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -214,6 +235,7 @@ func TestLateToolUpdateAfterPromptResponseIsReprinted(t *testing.T) {
 	}
 	m.printQueue = nil
 
+	release()
 	waitForSnapshot(t, c, "Run tests · completed")
 	m.syncTranscript()
 	late := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -232,7 +254,7 @@ func TestLateKindOnlyToolUpdateIsIgnored(t *testing.T) {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "kind")
+	c, release := openLateAgentClient(t, "kind")
 	m.client = c
 	finishTurn(t, m, c)
 	if first := ansi.Strip(strings.Join(m.printQueue, "\n")); !strings.Contains(first, "◦ Run tests") {
@@ -240,6 +262,7 @@ func TestLateKindOnlyToolUpdateIsIgnored(t *testing.T) {
 	}
 	m.printQueue = nil
 
+	release()
 	waitForSnapshot(t, c, "execute")
 	m.syncTranscript()
 	if late := ansi.Strip(strings.Join(m.printQueue, "\n")); late != "" {
@@ -252,7 +275,7 @@ func TestLateOlderToolUpdateIsReprinted(t *testing.T) {
 		t.Skip("agent process mode")
 	}
 	m := composer(t)
-	c := openLateAgentClient(t, "older")
+	c, release := openLateAgentClient(t, "older")
 	m.client = c
 	finishTurn(t, m, c)
 	first := ansi.Strip(strings.Join(m.printQueue, "\n"))
@@ -261,6 +284,7 @@ func TestLateOlderToolUpdateIsReprinted(t *testing.T) {
 	}
 	m.printQueue = nil
 
+	release()
 	waitForSnapshot(t, c, "Run tests · completed")
 	m.syncTranscript()
 	late := ansi.Strip(strings.Join(m.printQueue, "\n"))

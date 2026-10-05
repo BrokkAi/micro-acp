@@ -17,10 +17,11 @@ import (
 )
 
 type terminalOwner struct {
-	host    *clienthost.Host
-	id      schema.TerminalId
-	session schema.SessionId
-	title   string
+	host *clienthost.Host
+	id   schema.TerminalId
+	// session asked for the terminal; hostSession is the root the host knows.
+	session, hostSession schema.SessionId
+	title                string
 }
 
 // This UI keeps one active session. Stop its remaining terminals when switching.
@@ -31,7 +32,7 @@ func (c *Client) releaseTerminals() {
 	c.mu.Unlock()
 	for id, owner := range owners {
 		c.updateTerminal(id, owner)
-		raw, _ := json.Marshal(schema.ReleaseTerminalRequest{SessionID: owner.session, TerminalID: owner.id})
+		raw, _ := json.Marshal(schema.ReleaseTerminalRequest{SessionID: owner.hostSession, TerminalID: owner.id})
 		_, _ = owner.host.Request(c.ctx, schema.TerminalReleaseMethodName, raw)
 	}
 }
@@ -110,6 +111,20 @@ func (c *Client) hostRequest(ctx context.Context, method string, raw json.RawMes
 	if err := json.Unmarshal(raw, &scope); err != nil {
 		return nil, err
 	}
+	// Subagents share the root session's workspace. The hosts only know the
+	// root, so a child's request is sent to them under the root's ID.
+	hostSession := scope.SessionID
+	c.mu.Lock()
+	if child := c.subagent(string(scope.SessionID)); child != nil {
+		hostSession = c.wire.SessionID
+	}
+	c.mu.Unlock()
+	if hostSession != scope.SessionID {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(raw, &fields)
+		fields["sessionId"], _ = json.Marshal(hostSession)
+		raw, _ = json.Marshal(fields)
+	}
 	host := c.host
 	if scope.Path != "" {
 		host = c.hostFor(scope.Path)
@@ -142,7 +157,7 @@ func (c *Client) hostRequest(ctx context.Context, method string, raw json.RawMes
 		c.mu.Lock()
 		c.terminalSequence++
 		id := fmt.Sprintf("terminal-%d-%s", c.terminalSequence, created.TerminalID)
-		owner := terminalOwner{host, created.TerminalID, scope.SessionID, strings.Join(append([]string{scope.Command}, scope.Args...), " ")}
+		owner := terminalOwner{host, created.TerminalID, scope.SessionID, hostSession, strings.Join(append([]string{scope.Command}, scope.Args...), " ")}
 		c.terminalHosts[id] = owner
 		c.mu.Unlock()
 		c.updateTerminal(id, owner)
@@ -171,7 +186,7 @@ func (c *Client) pollTerminal(id string, owner terminalOwner) {
 	}
 }
 func (c *Client) updateTerminal(id string, owner terminalOwner) bool {
-	raw, _ := json.Marshal(schema.TerminalOutputRequest{SessionID: owner.session, TerminalID: owner.id})
+	raw, _ := json.Marshal(schema.TerminalOutputRequest{SessionID: owner.hostSession, TerminalID: owner.id})
 	result, err := owner.host.Request(c.ctx, schema.TerminalOutputMethodName, raw)
 	if err != nil {
 		return true
@@ -191,11 +206,15 @@ func (c *Client) updateTerminal(id string, owner terminalOwner) bool {
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.current.RemoteID != string(owner.session) {
+	if c.current.RemoteID != string(owner.hostSession) {
 		return true
 	}
-	for i := range c.current.Messages {
-		m := &c.current.Messages[i]
+	messages := c.transcript(string(owner.session))
+	if messages == nil {
+		return true
+	}
+	for i := range *messages {
+		m := &(*messages)[i]
 		if m.Role == "terminal" && m.ID == id {
 			if m.Text != text {
 				m.Text = text
@@ -204,7 +223,7 @@ func (c *Client) updateTerminal(id string, owner terminalOwner) bool {
 			return output.ExitStatus != nil
 		}
 	}
-	c.current.Messages = append(c.current.Messages, store.Message{Role: "terminal", ID: id, Text: text})
+	*messages = append(*messages, store.Message{Role: "terminal", ID: id, Text: text})
 	c.revision++
 	return output.ExitStatus != nil
 }

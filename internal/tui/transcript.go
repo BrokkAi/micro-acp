@@ -60,6 +60,10 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 		return prefix + m.markdown(text) + "\n"
 	case "tool":
 		return m.toolView(message, details, width)
+	case "subagent":
+		return m.subagentView(message, details, width)
+	case "message":
+		return m.sessionMessageView(message, width)
 	case "thought":
 		if details {
 			return m.theme.muted.Render("Thinking\n"+ansi.Hardwrap(text, width, true)) + "\n"
@@ -126,6 +130,10 @@ func (m *model) syncTranscript() {
 		return
 	}
 	m.plan = s.Plan
+	m.subagents = make(map[string]store.Subagent, len(s.Subagents))
+	for _, child := range s.Subagents {
+		m.subagents[child.ID] = child
+	}
 	if s.ID != m.printedSession {
 		inherited := 0
 		if s.ParentID == m.printedSession {
@@ -144,6 +152,9 @@ func (m *model) syncTranscript() {
 	}
 	if m.page == "details" {
 		m.refreshDetails()
+	}
+	if m.page == "subagent" {
+		m.refreshSubagent()
 	}
 	for m.printedIndex < len(s.Messages) {
 		i := m.printedIndex
@@ -169,7 +180,12 @@ func (m *model) syncTranscript() {
 			status := *message.Tool.Status
 			final = final || status == schema.ToolCallStatusCompleted || status == schema.ToolCallStatusFailed
 		}
-		if message.Role == "notice" {
+		if message.Role == "notice" || message.Role == "message" {
+			final = true
+		}
+		// A child can run for the rest of the turn. Commit its row at once
+		// and reprint it when its state changes, so later output is not held.
+		if message.Role == "subagent" {
 			final = true
 		}
 		committed := message.Text
@@ -181,8 +197,8 @@ func (m *model) syncTranscript() {
 				m.queueOutput(m.messageView(message, false, m.streamPrefix > 0))
 			}
 			m.committedIndex, m.committedText = i, committed
-			if message.Role == "tool" {
-				m.committedTools[i] = toolSignature(message)
+			if signature, ok := m.rowSignature(message); ok {
+				m.committedTools[i] = signature
 			}
 			m.printedIndex++
 			m.streamPrefix = 0
@@ -216,14 +232,11 @@ func (m *model) syncTranscript() {
 	}
 	for i := 0; i < m.printedIndex && i < len(s.Messages); i++ {
 		message := s.Messages[i]
-		if message.Role != "tool" {
-			continue
-		}
 		committed, ok := m.committedTools[i]
 		if !ok {
 			continue
 		}
-		if current := toolSignature(message); current != committed {
+		if current, _ := m.rowSignature(message); current != committed {
 			m.queueOutput(m.messageView(message, false, false))
 			m.committedTools[i] = current
 		}
@@ -247,6 +260,19 @@ func (m *model) syncTranscript() {
 	}
 	m.live = strings.Join(live, "\n")
 }
+
+// rowSignature is what a committed tool or subagent row shows. Rows are
+// reprinted when it changes.
+func (m *model) rowSignature(message store.Message) (string, bool) {
+	switch message.Role {
+	case "tool":
+		return toolSignature(message), true
+	case "subagent":
+		return m.subagentSignature(message), true
+	}
+	return "", false
+}
+
 func (m *model) refreshDetails() {
 	if m.client == nil {
 		return

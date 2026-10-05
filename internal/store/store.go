@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -26,6 +27,96 @@ type Message struct {
 	Cancelled bool `json:"cancelled,omitempty"`
 	// Pending steering is withheld from scrollback and saved history until accepted.
 	Pending bool `json:"-"`
+	// Sender and Recipient name the sessions of an inter-session message.
+	Sender    string `json:"sender,omitempty"`
+	Recipient string `json:"recipient,omitempty"`
+}
+
+// Subagent is a child session an agent started. Its row in the parent
+// transcript is a message with role "subagent" and the child's ID.
+type Subagent struct {
+	ID          string    `json:"id"`
+	ParentID    string    `json:"parent_id"`
+	Title       string    `json:"title,omitempty"`
+	Description string    `json:"description,omitempty"`
+	Prompt      string    `json:"prompt,omitempty"`
+	State       string    `json:"state,omitempty"`
+	StopReason  string    `json:"stop_reason,omitempty"`
+	CanCancel   bool      `json:"can_cancel,omitempty"`
+	Messages    []Message `json:"messages"`
+}
+
+// Subagent states as reported: the final draft's running, idle,
+// requires_action and unknown, and the earlier drafts' outcomes.
+const (
+	SubagentRunning        = "running"
+	SubagentIdle           = "idle"
+	SubagentRequiresAction = "requires_action"
+	SubagentUnknown        = "unknown"
+	SubagentCompleted      = "completed"
+	SubagentFailed         = "failed"
+	SubagentCancelled      = "cancelled"
+	SubagentDisconnected   = "disconnected"
+)
+
+// Active reports whether the child is still working or waiting on the user.
+func (s Subagent) Active() bool {
+	return s.State == SubagentRunning || s.State == SubagentRequiresAction
+}
+
+// StateLabel is the short state shown beside a child's name.
+func (s Subagent) StateLabel() string {
+	switch s.State {
+	case SubagentRunning:
+		return "running"
+	case SubagentRequiresAction:
+		return "waiting on you"
+	case SubagentIdle:
+		switch s.StopReason {
+		case "":
+			return "idle"
+		case "end_turn":
+			return "done"
+		case "cancelled":
+			return "cancelled"
+		default:
+			return "stopped · " + s.StopReason
+		}
+	case SubagentCompleted:
+		return "done"
+	case "":
+		return "started"
+	default:
+		return s.State
+	}
+}
+
+// Name is the child's title, or a fallback from its ID.
+func (s Subagent) Name() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	if s.Description != "" {
+		return s.Description
+	}
+	return "Subagent " + s.ID
+}
+
+// Generation is the run number encoded in a resumed child's ID
+// (`<id>:generation:<n>`), or 0 for a first run.
+func (s Subagent) Generation() int {
+	i := strings.LastIndex(s.ID, ":generation:")
+	if i < 0 {
+		return 0
+	}
+	n := 0
+	for _, r := range s.ID[i+len(":generation:"):] {
+		if r < '0' || r > '9' {
+			return 0
+		}
+		n = n*10 + int(r-'0')
+	}
+	return n
 }
 
 type Session struct {
@@ -44,6 +135,28 @@ type Session struct {
 	Usage                 *schema.UsageUpdate       `json:"usage,omitempty"`
 	Plan                  *schema.Plan              `json:"plan,omitempty"`
 	AdditionalDirectories []string                  `json:"additional_directories,omitempty"`
+	Subagents             []Subagent                `json:"subagents,omitempty"`
+}
+
+// Clone copies the message and subagent slices so the copy can be read while
+// the original keeps changing.
+func (s Session) Clone() Session {
+	s.Messages = slices.Clone(s.Messages)
+	s.Subagents = slices.Clone(s.Subagents)
+	for i := range s.Subagents {
+		s.Subagents[i].Messages = slices.Clone(s.Subagents[i].Messages)
+	}
+	return s
+}
+
+// Subagent returns the child with the given session ID.
+func (s Session) Subagent(id string) (Subagent, bool) {
+	for _, child := range s.Subagents {
+		if child.ID == id {
+			return child, true
+		}
+	}
+	return Subagent{}, false
 }
 
 type Store struct{ Directory string }

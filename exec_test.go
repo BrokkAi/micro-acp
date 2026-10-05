@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -155,5 +157,61 @@ func TestAnswerPermissionHonorsPolicy(t *testing.T) {
 	failed := answerPermission(request, "fail")
 	if failed.Cancelled == nil {
 		t.Fatalf("fail policy should cancel, got %+v", failed)
+	}
+}
+
+// TestMain lets `--demo` runs in this package start the test binary as the
+// demo agent, as the real binary does.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && os.Args[1] == "__demo-agent" {
+		if err := run(context.Background(), os.Args[1:], os.Stdout, os.Stderr); err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestExecIncludesSubagents(t *testing.T) {
+	t.Setenv("MICRO_ACP_HOME", t.TempDir())
+	var out bytes.Buffer
+	// The demo child asks for permission; the policy answers it like any other.
+	if err := run(context.Background(), []string{"--demo", "--permission", "allow", "--format", "json", "exec", "subagent"}, &out, &out); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	var result execResult
+	if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	if len(result.Subagents) != 2 {
+		t.Fatalf("subagents = %+v", result.Subagents)
+	}
+	child, nested := result.Subagents[0], result.Subagents[1]
+	if child.ParentID == "" || nested.ParentID != child.ID || child.State != "idle" || child.StopReason != "end_turn" || !strings.Contains(child.Text, "Demo report") || !strings.Contains(nested.Text, "README") {
+		t.Fatalf("subagents = %+v", result.Subagents)
+	}
+
+	out.Reset()
+	if err := run(context.Background(), []string{"--demo", "--permission", "deny", "--format", "stream-json", "exec", "subagent"}, &out, &out); err != nil {
+		t.Fatalf("%v: %s", err, out.String())
+	}
+	var states, childText []string
+	var id any
+	for _, line := range strings.Split(strings.TrimSpace(out.String()), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("%v: %s", err, line)
+		}
+		if event["type"] == "subagent" && event["title"] == "Survey the workspace" {
+			id = event["id"]
+			states = append(states, fmt.Sprint(event["state"]))
+		}
+		if event["type"] == "assistant" && id != nil && event["subagent"] == id {
+			childText = append(childText, fmt.Sprint(event["text"]))
+		}
+	}
+	// Polling can merge quick state changes, but the child always ends idle.
+	if len(states) == 0 || states[0] != "running" || states[len(states)-1] != "idle" || !strings.Contains(strings.Join(childText, ""), "Permission was not granted") {
+		t.Fatalf("stream states %q, child text %q:\n%s", states, childText, out.String())
 	}
 }

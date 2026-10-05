@@ -28,6 +28,10 @@ func TestAgentProcess(t *testing.T) {
 		serveRichAgent()
 		os.Exit(0)
 	}
+	if dialect, ok := strings.CutPrefix(mode, "subagents-"); ok {
+		serveSubagentAgent(dialect)
+		os.Exit(0)
+	}
 	if mode == "demo" {
 		if err := demo.Run(context.Background(), os.Getenv("MICRO_ACP_TEST_DATA")); err != nil {
 			fmt.Fprintln(os.Stderr, err)

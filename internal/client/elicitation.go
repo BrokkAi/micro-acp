@@ -11,13 +11,15 @@ import (
 )
 
 type Elicitation struct {
-	Agent   string
-	Request schema.CreateElicitationRequest
-	Schema  *schema.ElicitationSchema
-	URL     string
-	ID      schema.ElicitationId
-	Reply   chan schema.CreateElicitationResponse
-	Done    <-chan struct{}
+	Agent string
+	// Subagent names the child session asking, or is empty for the session itself.
+	Subagent string
+	Request  schema.CreateElicitationRequest
+	Schema   *schema.ElicitationSchema
+	URL      string
+	ID       schema.ElicitationId
+	Reply    chan schema.CreateElicitationResponse
+	Done     <-chan struct{}
 }
 
 func (c *Client) elicit(ctx context.Context, raw json.RawMessage) (any, error) {
@@ -56,10 +58,13 @@ func (c *Client) elicit(ctx context.Context, raw json.RawMessage) (any, error) {
 		return nil, &acp.RPCError{Code: -32602, Message: "unsupported elicitation mode"}
 	}
 	c.mu.Lock()
-	active := c.wire.SessionID
 	turn := c.permissionCtx
+	subagent, known := "", true
+	if session != nil {
+		subagent, known = c.knownSession(session.SessionID)
+	}
 	c.mu.Unlock()
-	if session != nil && (active == "" || session.SessionID != active) {
+	if !known {
 		return nil, &acp.RPCError{Code: -32602, Message: "unknown elicitation session"}
 	}
 	requestCtx, cancel := context.WithCancel(ctx)
@@ -85,7 +90,7 @@ func (c *Client) elicit(ctx context.Context, raw json.RawMessage) (any, error) {
 			c.mu.Unlock()
 		}
 	}()
-	e := Elicitation{Agent: c.Agent, Request: request, Schema: payload.Schema, URL: payload.URL, ID: payload.ID, Reply: make(chan schema.CreateElicitationResponse, 1), Done: requestCtx.Done()}
+	e := Elicitation{Agent: c.Agent, Subagent: subagent, Request: request, Schema: payload.Schema, URL: payload.URL, ID: payload.ID, Reply: make(chan schema.CreateElicitationResponse, 1), Done: requestCtx.Done()}
 	select {
 	case c.Elicitations <- e:
 	case <-requestCtx.Done():

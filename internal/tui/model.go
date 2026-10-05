@@ -54,6 +54,7 @@ type sessionsMsg struct {
 	err      error
 }
 type permissionMsg struct{ permission client.Permission }
+type subagentStopMsg struct{ err error }
 type pulseMsg time.Time
 type printedMsg struct{}
 type queuedPrompt struct {
@@ -124,11 +125,15 @@ type model struct {
 	// and tool updates can target any committed message. The transcript
 	// reprints what changed instead of leaving it invisible, remembering tool
 	// lines by message index.
-	committedIndex     int
-	committedText      string
-	committedTools     map[int]string
-	live               string
-	plan               *schema.Plan
+	committedIndex int
+	committedText  string
+	committedTools map[int]string
+	live           string
+	plan           *schema.Plan
+	// subagents holds the active tree's children by ID; subagent is the one
+	// whose transcript page is open.
+	subagents          map[string]store.Subagent
+	subagent           string
 	renderCache        map[string]string
 	printQueue         []string
 	printing, quitting bool
@@ -170,7 +175,7 @@ func newModel(ctx context.Context, options Options) *model {
 	s := spinner.New()
 	s.Spinner = spinner.Dot
 	s.Style = p.accent
-	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, committedIndex: -1, committedTools: map[int]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
+	m := &model{ctx: ctx, options: options, registry: registry.Client{URL: options.Config.RegistryURL, Cache: options.Paths.Cache}, store: store.Store{Directory: options.Paths.Data}, page: "chat", input: input, viewport: viewport.New(viewport.WithWidth(76), viewport.WithHeight(12)), spinner: s, width: 80, height: 30, renderCache: map[string]string{}, subagents: map[string]store.Subagent{}, committedIndex: -1, committedTools: map[int]string{}, interactions: client.Interactions{Permissions: make(chan client.Permission, 32), Elicitations: make(chan client.Elicitation, 32)}}
 	m.rebuildAgents()
 	m.theme = p
 	return m
@@ -461,6 +466,13 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		}
 	case steeredMsg:
 		return m, m.steeringResult(msg)
+	case subagentStopMsg:
+		if msg.err != nil {
+			m.lastError = msg.err.Error()
+		} else {
+			m.lastError = ""
+			m.status = "Asked the subagent to stop"
+		}
 	case sessionsMsg:
 		m.busy = false
 		m.status = "Ready"
@@ -609,10 +621,14 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	if m.picker != nil {
 		return m.pickerKey(msg)
 	}
-	if m.page == "info" || m.page == "details" {
+	if m.page == "info" || m.page == "details" || m.page == "subagent" {
 		if k == "esc" || k == "ctrl+o" {
 			m.page = "chat"
 			return nil
+		}
+		if k == "ctrl+x" && m.page == "subagent" {
+			c, id := m.client, m.subagent
+			return func() tea.Msg { return subagentStopMsg{c.CancelSubagent(id)} }
 		}
 		var cmd tea.Cmd
 		m.viewport, cmd = m.viewport.Update(msg)
