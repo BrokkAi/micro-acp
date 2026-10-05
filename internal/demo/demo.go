@@ -19,6 +19,8 @@ type Agent struct {
 	Store    store.Store
 	mu       sync.Mutex
 	settings map[schema.SessionId][]schema.SessionConfigOption
+	children map[schema.SessionId]context.CancelFunc
+	sequence int
 }
 
 func (a *Agent) options(id schema.SessionId) []schema.SessionConfigOption {
@@ -78,6 +80,12 @@ func (a *Agent) LoadSession(ctx context.Context, c agent.Client, r schema.LoadSe
 		return schema.LoadSessionResponse{}, err
 	}
 	for _, m := range s.Messages {
+		if m.Role == "subagent" {
+			if err := replaySubagent(ctx, c, s, m.ID); err != nil {
+				return schema.LoadSessionResponse{}, err
+			}
+			continue
+		}
 		chunk := schema.ContentChunk{Content: acp.NewTextContent(m.Text)}
 		update := acp.NewAgentMessageChunkUpdate(r.SessionID, chunk)
 		if m.Role == "user" {
@@ -136,7 +144,16 @@ func (a *Agent) Prompt(ctx context.Context, c agent.Client, r schema.PromptReque
 	a.mu.Unlock()
 	answer := "This is the **local demo agent**. No model or credentials are being used.\n\nYou said:\n\n> " + strings.ReplaceAll(text, "\n", "\n> ")
 	if !brief {
-		answer += "\n\nTry `/settings`, `/new`, `/sessions`, `/fork --context`, or `/delete`. Send `permission` for an approval dialog, `form` for structured input, or `slow` to test cancellation."
+		answer += "\n\nTry `/settings`, `/new`, `/sessions`, `/fork --context`, or `/delete`. Send `permission` for an approval dialog, `form` for structured input, `subagent` for a child session, or `slow` to test cancellation."
+	}
+	if strings.EqualFold(text, "subagent") {
+		summary, children, err := a.runSubagent(ctx, c, r.SessionID, stream)
+		if err != nil {
+			return schema.PromptResponse{}, err
+		}
+		answer = summary
+		s.Messages = append(s.Messages, store.Message{Role: "subagent", ID: children[0].ID})
+		s.Subagents = append(s.Subagents, children...)
 	}
 	if strings.EqualFold(text, "form") {
 		var response schema.CreateElicitationResponse

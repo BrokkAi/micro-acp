@@ -6,7 +6,6 @@ import (
 	"strings"
 	"time"
 
-	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
@@ -23,13 +22,13 @@ func (c *Client) request(ctx context.Context, method string, raw json.RawMessage
 	if err := json.Unmarshal(raw, &request); err != nil {
 		return nil, err
 	}
+	subagent, err := c.requestSession(request.SessionID)
+	if err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
-	id := c.wire.SessionID
 	permissionCtx := c.permissionCtx
 	c.mu.Unlock()
-	if id == "" || id != request.SessionID {
-		return nil, &acp.RPCError{Code: -32602, Message: "unknown session"}
-	}
 	if permissionCtx == nil {
 		permissionCtx = c.ctx
 	}
@@ -38,7 +37,7 @@ func (c *Client) request(ctx context.Context, method string, raw json.RawMessage
 	defer stop()
 	defer cancel()
 	permissionCtx = requestCtx
-	p := Permission{Request: request, Reply: make(chan schema.RequestPermissionOutcome, 1), Done: permissionCtx.Done()}
+	p := Permission{Request: request, Subagent: subagent, Reply: make(chan schema.RequestPermissionOutcome, 1), Done: permissionCtx.Done()}
 	cancelled := schema.RequestPermissionResponse{Outcome: schema.RequestPermissionOutcome{Cancelled: &schema.RequestPermissionOutcomeCancelled{}}}
 	select {
 	case c.Permissions <- p:
@@ -65,22 +64,45 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 		return nil
 	}
 	var envelope struct {
-		SessionID string `json:"sessionId"`
-		Update    struct {
-			Kind string `json:"sessionUpdate"`
-		} `json:"update"`
+		SessionID string          `json:"sessionId"`
+		Update    json.RawMessage `json:"update"`
 	}
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		return err
 	}
+	var kind struct {
+		Kind string `json:"sessionUpdate"`
+	}
+	_ = json.Unmarshal(envelope.Update, &kind)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.current.ID == "" {
+		return nil
+	}
+	root := c.current.RemoteID == "" || c.current.RemoteID == envelope.SessionID
+	if !root && c.subagent(envelope.SessionID) == nil {
+		// Updates for sessions this tree never announced are dropped.
+		return nil
+	}
+	if !root {
+		c.childUpdate(envelope.SessionID, kind.Kind, envelope.Update)
+		return nil
+	}
+	switch kind.Kind {
+	case "subagent_spawned", "subagent_state_update", "subagent_update":
+		if c.current.RemoteID != "" {
+			c.subagentUpdate(c.current.RemoteID, kind.Kind, envelope.Update)
+			c.revision++
+		}
+		return nil
+	case "session_message", "session_message_chunk":
+		c.sessionMessage(&c.current.Messages, kind.Kind, envelope.Update)
+		c.revision++
+		return nil
+	}
 	// Unknown extension notifications must not terminate a healthy connection.
 	var update schema.SessionNotification
 	if err := json.Unmarshal(raw, &update); err != nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.current.ID == "" || (c.current.RemoteID != "" && c.current.RemoteID != envelope.SessionID) {
 		return nil
 	}
 	u := update.Update
@@ -95,64 +117,15 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 			host.SetSession(update.SessionID)
 		}
 	}
-	chunk := func(role string, ch *schema.ContentChunk) {
-		text := ContentText(ch.Content)
-		id := ""
-		if ch.MessageID != nil {
-			id = string(*ch.MessageID)
-		}
-		last := len(c.current.Messages) - 1
-		if last >= 0 && c.current.Messages[last].Role == role && c.current.Messages[last].ID == id {
-			c.current.Messages[last].Text += text
-		} else {
-			c.current.Messages = append(c.current.Messages, store.Message{Role: role, Text: text, ID: id})
-		}
-		if ch.Content.Text == nil {
-			i := len(c.current.Messages) - 1
-			c.current.Messages[i].Content = append(append([]schema.ContentBlock(nil), c.current.Messages[i].Content...), ch.Content)
-		}
-	}
+	marking := c.turnDone != nil && c.cancelRequested
 	switch {
-	case u.AgentMessageChunk != nil:
-		chunk("assistant", u.AgentMessageChunk)
 	case u.UserMessageChunk != nil:
 		if c.replaying {
-			chunk("user", u.UserMessageChunk)
-		}
-	case u.AgentThoughtChunk != nil:
-		chunk("thought", u.AgentThoughtChunk)
-	case u.ToolCall != nil:
-		t := u.ToolCall
-		c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t, Cancelled: c.turnDone != nil && c.cancelRequested && unfinishedTool(t)})
-	case u.ToolCallUpdate != nil:
-		t := u.ToolCallUpdate
-		found := false
-		for i := len(c.current.Messages) - 1; i >= 0; i-- {
-			m := &c.current.Messages[i]
-			if m.Role == "tool" && m.ID == string(t.ToolCallID) {
-				previous := schema.ToolCall{ToolCallID: t.ToolCallID, Title: m.Text}
-				if m.Tool != nil {
-					previous = *m.Tool
-				}
-				updated := mergeTool(previous, *t)
-				m.Tool = &updated
-				m.Text = ToolText(updated)
-				m.Cancelled = m.Cancelled && unfinishedTool(&updated)
-				found = true
-				break
-			}
-		}
-		if !found {
-			updated := mergeTool(schema.ToolCall{ToolCallID: t.ToolCallID}, *t)
-			c.current.Messages = append(c.current.Messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(updated), Tool: &updated, Cancelled: c.turnDone != nil && c.cancelRequested && unfinishedTool(&updated)})
+			applyMessage(&c.current.Messages, u, marking)
 		}
 	case u.Plan != nil:
 		c.current.Plan = u.Plan
-		var lines []string
-		for _, entry := range u.Plan.Entries {
-			lines = append(lines, string(entry.Status)+"  ["+string(entry.Priority)+"] "+entry.Content)
-		}
-		c.current.Messages = append(c.current.Messages, store.Message{Role: "plan", Text: strings.Join(lines, "\n")})
+		applyMessage(&c.current.Messages, u, marking)
 	case u.SessionInfoUpdate != nil:
 		c.steeringStatus(u.SessionInfoUpdate.Meta)
 		if u.SessionInfoUpdate.Title != nil {
@@ -175,7 +148,87 @@ func (c *Client) notification(method string, raw json.RawMessage) error {
 			modes.CurrentModeID = u.CurrentModeUpdate.CurrentModeID
 			c.wire.Modes = &modes
 		}
+	default:
+		applyMessage(&c.current.Messages, u, marking)
 	}
 	c.revision++
 	return nil
+}
+
+// childUpdate applies an update addressed to an announced subagent. Session
+// settings belong to the root, so a child only keeps its transcript and its
+// own children. Called with mu held.
+func (c *Client) childUpdate(id, kind string, raw json.RawMessage) {
+	switch kind {
+	case "subagent_spawned", "subagent_state_update", "subagent_update":
+		c.subagentUpdate(id, kind, raw)
+	case "session_message", "session_message_chunk":
+		c.sessionMessage(&c.subagent(id).Messages, kind, raw)
+	default:
+		var u schema.SessionUpdate
+		if json.Unmarshal(raw, &u) != nil {
+			return
+		}
+		// A child never echoes this client's prompts, so its user messages
+		// are the instructions it received.
+		applyMessage(&c.subagent(id).Messages, u, false)
+	}
+	c.revision++
+}
+
+// applyMessage adds transcript content from one update: message chunks, tool
+// calls and plans. cancelled marks unfinished tools from a stopping turn.
+func applyMessage(messages *[]store.Message, u schema.SessionUpdate, cancelled bool) {
+	chunk := func(role string, ch *schema.ContentChunk) {
+		text := ContentText(ch.Content)
+		id := ""
+		if ch.MessageID != nil {
+			id = string(*ch.MessageID)
+		}
+		last := len(*messages) - 1
+		if last >= 0 && (*messages)[last].Role == role && (*messages)[last].ID == id {
+			(*messages)[last].Text += text
+		} else {
+			*messages = append(*messages, store.Message{Role: role, Text: text, ID: id})
+		}
+		if ch.Content.Text == nil {
+			i := len(*messages) - 1
+			(*messages)[i].Content = append(append([]schema.ContentBlock(nil), (*messages)[i].Content...), ch.Content)
+		}
+	}
+	switch {
+	case u.AgentMessageChunk != nil:
+		chunk("assistant", u.AgentMessageChunk)
+	case u.UserMessageChunk != nil:
+		chunk("user", u.UserMessageChunk)
+	case u.AgentThoughtChunk != nil:
+		chunk("thought", u.AgentThoughtChunk)
+	case u.ToolCall != nil:
+		t := u.ToolCall
+		*messages = append(*messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(*t), Tool: t, Cancelled: cancelled && unfinishedTool(t)})
+	case u.ToolCallUpdate != nil:
+		t := u.ToolCallUpdate
+		for i := len(*messages) - 1; i >= 0; i-- {
+			m := &(*messages)[i]
+			if m.Role == "tool" && m.ID == string(t.ToolCallID) {
+				previous := schema.ToolCall{ToolCallID: t.ToolCallID, Title: m.Text}
+				if m.Tool != nil {
+					previous = *m.Tool
+				}
+				updated := mergeTool(previous, *t)
+				m.Tool = &updated
+				m.Text = ToolText(updated)
+				m.Cancelled = m.Cancelled && unfinishedTool(&updated)
+				return
+			}
+		}
+		updated := mergeTool(schema.ToolCall{ToolCallID: t.ToolCallID}, *t)
+		*messages = append(*messages, store.Message{Role: "tool", ID: string(t.ToolCallID), Text: ToolText(updated), Tool: &updated, Cancelled: cancelled && unfinishedTool(&updated)})
+	case u.Plan != nil:
+		var lines []string
+		for _, entry := range u.Plan.Entries {
+			lines = append(lines, string(entry.Status)+"  ["+string(entry.Priority)+"] "+entry.Content)
+		}
+		*messages = append(*messages, store.Message{Role: "plan", Text: strings.Join(lines, "\n")})
+	}
 }

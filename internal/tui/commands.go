@@ -15,6 +15,7 @@ var commands = []item{
 	{title: "Reasoning effort", description: "Choose how much the model reasons", id: "/effort"},
 	{title: "Tool details", description: "Expand tools, reasoning and full output · Ctrl+O", id: "/details"},
 	{title: "Queued prompts", description: "Edit or remove prompts · /queue send resumes · /queue clear removes all", id: "/queue"},
+	{title: "Subagents", description: "Child sessions the agent started · open one to read its transcript", id: "/subagents"},
 
 	{title: "New session", description: "Start a fresh conversation", id: "/new"},
 	{title: "Close session", description: "Close the active session while keeping its history", id: "/close"},
@@ -82,7 +83,7 @@ func (m *model) command(text string) tea.Cmd {
 		return nil
 	}
 	c := m.client
-	if m.busy && name != "/info" && name != "/logs" && name != "/details" && name != "/queue" && name != "/attach" && name != "/detach" && name != "/resource" {
+	if m.busy && name != "/info" && name != "/logs" && name != "/details" && name != "/queue" && name != "/attach" && name != "/detach" && name != "/resource" && name != "/subagents" {
 		m.lastError = "Stop the current turn with Esc before changing the session"
 		return nil
 	}
@@ -179,6 +180,22 @@ func (m *model) command(text string) tea.Cmd {
 			return nil
 		}
 		return m.sendPrompt("/" + strings.TrimPrefix(arg, "/"))
+	case "/subagents":
+		entries := m.subagentItems()
+		if len(entries) == 0 {
+			m.status = "No subagents in this session"
+			return nil
+		}
+		if arg != "" {
+			for _, entry := range entries {
+				if entry.id == arg {
+					m.openSubagent(arg)
+					return nil
+				}
+			}
+		}
+		m.openPicker("subagents", entries)
+		return nil
 	case "/details":
 		m.page = "details"
 		m.refreshDetails()

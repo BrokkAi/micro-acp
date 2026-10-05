@@ -37,7 +37,7 @@ func filterItems(entries []item, query string) []item {
 }
 func (p *picker) filter() { p.matches = filterItems(p.entries, p.input.Value()); p.index = 0 }
 func (m *model) openPicker(kind string, entries []item) {
-	titles := map[string]string{"agents": "Choose an agent", "sessions": "Resume a session", "settings": "Session configuration", "choices": m.selector.Name, "auth": "Sign in", "queue": "Queued prompts", "commands": "Commands"}
+	titles := map[string]string{"agents": "Choose an agent", "sessions": "Resume a session", "settings": "Session configuration", "choices": m.selector.Name, "auth": "Sign in", "queue": "Queued prompts", "commands": "Commands", "subagents": "Subagents"}
 	input := textinput.New()
 	input.Placeholder = "Type to search…"
 	input.Prompt = "› "
@@ -83,6 +83,8 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			return m.command(selected.id)
 		case "auth":
 			return m.authenticate(selected.id)
+		case "subagents":
+			m.openSubagent(selected.id)
 		case "sessions":
 			s := selected.value.(store.Session)
 			m.resumeTarget = &s

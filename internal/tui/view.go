@@ -125,6 +125,9 @@ func (m *model) pickerView(height int) string {
 	if p.kind == "queue" {
 		hint = "Enter edit · Ctrl+D remove · Esc back"
 	}
+	if p.kind == "subagents" {
+		hint = "↑↓ navigate · Enter open transcript · Esc back"
+	}
 	return result + "\n" + m.theme.muted.Render(line(hint, w))
 }
 func (m *model) permissionView(height int) string {
@@ -133,6 +136,9 @@ func (m *model) permissionView(height int) string {
 	title := "Allow this action?"
 	if p.Request.ToolCall.Title != nil {
 		title = *p.Request.ToolCall.Title
+	}
+	if p.Subagent != "" {
+		title = subagentMark + " " + p.Subagent + " · " + title
 	}
 	tool := schema.ToolCall{ToolCallID: p.Request.ToolCall.ToolCallID, Content: p.Request.ToolCall.Content, RawInput: p.Request.ToolCall.RawInput, Locations: p.Request.ToolCall.Locations}
 	details := ansi.Hardwrap(clean(client.ToolText(tool)), w, true)
@@ -166,7 +172,13 @@ func (m *model) View() tea.View {
 	var statusParts []string
 	if m.busy && !modal {
 		elapsed := time.Since(m.startedAt).Round(time.Second)
-		statusParts = append(statusParts, m.spinner.View()+" "+m.theme.muted.Render(line(m.status+" · "+elapsed.String()+" · Esc stop", w-2)))
+		status := m.status
+		if n := m.runningSubagents(); n == 1 {
+			status += " · 1 subagent running"
+		} else if n > 1 {
+			status += fmt.Sprintf(" · %d subagents running", n)
+		}
+		statusParts = append(statusParts, m.spinner.View()+" "+m.theme.muted.Render(line(status+" · "+elapsed.String()+" · Esc stop", w-2)))
 	}
 	if !m.busy && m.status != "" && m.status != "Ready" && m.lastError == "" {
 		statusParts = append(statusParts, m.theme.muted.Render(line(m.status, w)))
@@ -214,10 +226,16 @@ func (m *model) View() tea.View {
 			action = "Remove this session from local history?"
 		}
 		panel = m.theme.danger.Render(ansi.Hardwrap(action, w, true)) + "\n" + line(m.confirm.Title, w) + "\n" + m.theme.muted.Render("y delete · n / Esc keep")
-	case m.page == "details" || m.page == "info" || m.authWaiting:
-		title := "Details"
+	case m.page == "details" || m.page == "info" || m.page == "subagent" || m.authWaiting:
+		title, hint := "Details", "PgUp/PgDn scroll · Esc back"
 		if m.authWaiting {
 			title = "Signing in"
+		}
+		if m.page == "subagent" {
+			title = m.subagentTitle()
+			if child := m.subagents[m.subagent]; child.CanCancel && child.Active() {
+				hint += " · Ctrl+X stop subagent"
+			}
 		}
 		v := m.viewport
 		bottom := v.AtBottom()
@@ -225,7 +243,7 @@ func (m *model) View() tea.View {
 		if bottom {
 			v.GotoBottom()
 		}
-		panel = m.theme.accent.Render(title) + "\n" + v.View() + "\n" + m.theme.muted.Render("PgUp/PgDn scroll · Esc back")
+		panel = m.theme.accent.Render(line(title, w)) + "\n" + v.View() + "\n" + m.theme.muted.Render(line(hint, w))
 	case m.picker != nil:
 		panel = m.pickerView(panelHeight)
 	case m.completion != nil:
