@@ -95,7 +95,7 @@ func runLogin(ctx context.Context, opts loginOptions, args []string, out, errOut
 
 	// A headless login cannot answer form or URL requests, so it advertises no
 	// elicitation support and declines anything an agent sends anyway.
-	c, err := client.OpenInteractive(ctx, agentID, cwd, command, opts.Store,
+	c, err := client.OpenInteractive(ctx, agentID, cwd, opts.Config.Launch(command), opts.Store,
 		client.Interactions{DisableElicitation: true}, opts.Config.Session)
 	if err != nil {
 		return clientError(nil, err)

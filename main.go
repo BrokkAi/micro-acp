@@ -57,6 +57,7 @@ type cliFlags struct {
 	method     string
 	json       bool
 	version    bool
+	acpV2      bool
 }
 
 func (f *cliFlags) register(fs *flag.FlagSet) {
@@ -73,6 +74,7 @@ func (f *cliFlags) register(fs *flag.FlagSet) {
 	fs.StringVar(&f.method, "method", f.method, "login method id, from a prior 'micro-acp login' listing")
 	fs.BoolVar(&f.json, "json", f.json, "agents: print machine-readable JSON")
 	fs.BoolVar(&f.version, "version", f.version, "print version")
+	fs.BoolVar(&f.acpV2, "acp-v2", f.acpV2, "request the ACP v2 draft; agents that answer v1 keep working")
 }
 
 // subcommands accept flags on either side of their name.
@@ -177,6 +179,7 @@ available in the TUI.
 		}
 		remaining = append([]string{name}, append(sub.Args(), commandArgs...)...)
 	}
+	cfg.ACPv2 = opts.acpV2
 	if rest, ok := positionalSubcommand(remaining, custom, "exec"); ok {
 		return runExec(ctx, execOptions{
 			Config:     cfg,

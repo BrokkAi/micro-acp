@@ -12,6 +12,7 @@ import (
 
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
+	agent2 "github.com/BrokkAi/acp-go/v2/agent"
 	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/config"
@@ -30,6 +31,14 @@ func TestAgentProcess(t *testing.T) {
 	}
 	if dialect, ok := strings.CutPrefix(mode, "subagents-"); ok {
 		serveSubagentAgent(dialect)
+		os.Exit(0)
+	}
+	if mode == "v2" {
+		_ = agent2.New(&v2TestAgent{mode: "ask"}).Serve(context.Background(), os.Stdin, os.Stdout)
+		os.Exit(0)
+	}
+	if mode == "v2-reject" {
+		serveRejectingAgent()
 		os.Exit(0)
 	}
 	if mode == "demo" {

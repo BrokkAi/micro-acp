@@ -173,6 +173,9 @@ func (m *model) View() tea.View {
 	if m.busy && !modal {
 		elapsed := time.Since(m.startedAt).Round(time.Second)
 		status := m.status
+		if m.client != nil && m.client.TurnState() == client.TurnRequiresAction {
+			status = "Waiting on you"
+		}
 		if n := m.runningSubagents(); n == 1 {
 			status += " · 1 subagent running"
 		} else if n > 1 {

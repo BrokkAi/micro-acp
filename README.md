@@ -143,6 +143,7 @@ after it; flags must precede any `--` that introduces a custom command:
 | `--method <id>` | Login method for `login`, as listed by `micro-acp login`. |
 | `--format`, `--permission`, `--timeout`, `--save` | Output, permission policy, deadline, and persistence for `exec`. |
 | `--json` | Machine-readable output for `agents`. |
+| `--acp-v2` | Ask the agent for the ACP v2 draft; agents that answer v1 keep working. |
 | `--version` | Print the build version and exit. |
 
 Pass a stdio ACP executable and its arguments after `--`:
@@ -201,6 +202,31 @@ Configure MCP servers and additional workspace directories in the same file:
 ```
 
 MCP entries use ACP's stdio, HTTP, or SSE server schema. The agent manages these servers. Optional transports and additional directories require advertised agent support. Relative additional directories resolve against `--cwd`; saved sessions retain their directory list. Current MCP configuration is sent on new, load, resume, and fork operations.
+
+### ACP v2 draft (opt-in)
+
+ACP v1 is the default. To try the [ACP v2 draft](https://agentclientprotocol.com/announcements/acp-v2-draft), pass `--acp-v2` or set `"protocol": "v2"` on a configured agent. The agents that speak v2 today also need their own switch:
+
+```json
+{
+  "agents": {
+    "claude-v2": {
+      "command": "npx",
+      "args": ["--yes", "@agentclientprotocol/claude-agent-acp"],
+      "env": { "CLAUDE_AGENT_ACP_EXPERIMENTAL_V2": "1" },
+      "protocol": "v2"
+    },
+    "graff-v2": {
+      "command": "graff",
+      "args": ["acp"],
+      "env": { "GRAFF_ACP_V2": "1" },
+      "protocol": "v2"
+    }
+  }
+}
+```
+
+An agent that answers v1 continues on v1. An agent that rejects v2 shows the error; micro-acp does not quietly retry with v1. On v2 the status line shows the turn state (`running`, `waiting on you`, `idle`), a failed turn shows as an error, and turns the agent starts on its own (codegraff's peer mail) appear as work in progress. Released claude-agent-acp (0.85.1) only has the v2 handshake; its v2 sessions are on its `main` branch. See the [ACP support matrix](docs/acp-support.md#acp-v2-draft) for what maps where.
 
 ## Sessions
 

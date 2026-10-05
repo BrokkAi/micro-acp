@@ -132,8 +132,10 @@ type model struct {
 	plan           *schema.Plan
 	// subagents holds the active tree's children by ID; subagent is the one
 	// whose transcript page is open.
-	subagents          map[string]store.Subagent
-	subagent           string
+	subagents map[string]store.Subagent
+	subagent  string
+	// agentTurn is a v2 turn the agent started without a prompt from here.
+	agentTurn          bool
 	renderCache        map[string]string
 	printQueue         []string
 	printing, quitting bool
@@ -283,7 +285,7 @@ func (m *model) connect(selected item) tea.Cmd {
 	m.picker = nil
 	m.completion = nil
 	ctx, cwd, r, st, settings, interactions := m.ctx, m.options.Cwd, m.registry, m.store, m.options.Config.Session, m.interactions
-	offline := m.options.Offline
+	offline, launch := m.options.Offline, m.options.Config.Launch
 	old := m.client
 	m.client = nil
 	m.live = ""
@@ -310,7 +312,7 @@ func (m *model) connect(selected item) tea.Cmd {
 				return connectedMsg{err: err}
 			}
 		}
-		c, err := client.OpenInteractive(ctx, selected.id, cwd, command, st, interactions, settings)
+		c, err := client.OpenInteractive(ctx, selected.id, cwd, launch(command), st, interactions, settings)
 		return connectedMsg{c, err}
 	}
 }
@@ -417,6 +419,9 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		if msg.client == m.client {
 			m.lastError = "Agent disconnected. /logs shows details; /reconnect restarts it."
 			m.status = "Disconnected"
+			if m.agentTurn {
+				m.agentTurn, m.busy, m.prompting = false, false, false
+			}
 		}
 	case resultMsg:
 		m.busy = false
@@ -547,7 +552,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			m.viewport.SetContent(clean(m.client.Diagnostics()))
 			m.viewport.GotoBottom()
 		}
-		return m, tea.Batch(cmd, pulse())
+		return m, tea.Batch(cmd, m.followAgentTurn(), pulse())
 	case spinner.TickMsg:
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
@@ -809,6 +814,34 @@ func (m *model) startPrompt(q queuedPrompt) tea.Cmd {
 		reason, err := c.PromptContent(q.blocks)
 		return resultMsg{status: "Ready", err: err, reason: reason, prompt: true}
 	}
+}
+
+// followAgentTurn shows a v2 turn the agent started on its own, such as one
+// for incoming mail, as work in progress until the agent reports idle.
+func (m *model) followAgentTurn() tea.Cmd {
+	if m.client == nil {
+		return nil
+	}
+	select {
+	case <-m.client.Done():
+		return nil
+	default:
+	}
+	state := m.client.TurnState()
+	active := state == client.TurnRunning || state == client.TurnRequiresAction
+	switch {
+	case active && !m.busy:
+		m.agentTurn, m.busy, m.prompting = true, true, true
+		m.startedAt = time.Now()
+		m.status = "Agent working"
+	case m.agentTurn && !active:
+		m.agentTurn, m.busy, m.prompting = false, false, false
+		m.status = "Ready"
+		m.syncTranscript()
+		m.rebuildHistory()
+		return m.dispatchQueue()
+	}
+	return nil
 }
 
 func (m *model) sendQueued() tea.Cmd {

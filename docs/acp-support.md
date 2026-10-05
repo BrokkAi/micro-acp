@@ -1,6 +1,6 @@
 # ACP support
 
-Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go` v0.12.1. All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
+Target: stable ACP v1 as represented by `github.com/BrokkAi/acp-go` v0.12.1, plus the opt-in [ACP v2 draft](#acp-v2-draft). All 25 methods in that stable schema have a client path or are handled by the SDK transport. Optional operations depend on negotiated agent capabilities. This is implementation and fixture coverage, not certification against every registry agent.
 
 ## Methods
 
@@ -71,11 +71,33 @@ Form fields support the restricted flat schema: strings, integers, numbers, bool
 - MCP configuration: stdio, HTTP and SSE definitions are forwarded during session operations. The agent connects to and operates those servers. This client is not an MCP server or an MCP-over-ACP proxy.
 - Additional directories: passed only through supported session operations, restored with saved sessions, and included in client callback routing.
 - Unknown notifications are ignored; unsupported requests receive JSON-RPC method-not-found. No editor document synchronization, inline completion, next-edit prediction or experimental provider-management capabilities are advertised.
-- Draft ACP v2, arbitrary third-party extensions, inline image display and audio playback are outside this implementation.
+- Arbitrary third-party extensions, inline image display and audio playback are outside this implementation. The ACP v2 draft is opt-in; see below.
 - Only one active conversation per connection is presented. Session switches release client terminal processes. Sessions and custom agents can be switched from the UI.
 - Registry freshness concerns discovery and the next agent launch. An already-running process is not upgraded during a turn.
 
 Run `make test` for the race-enabled suite and `make vet` for static checks. Tests use local subprocess agents and loopback registry servers; they do not use live model accounts. `--demo` exercises streaming, session history, settings, permission requests, forms and cancellation without credentials.
+
+## ACP v2 draft
+
+Opt-in with `--acp-v2` or `"protocol": "v2"` on a configured agent; v1 stays the default. The pinned draft is `schema-v2.0.0-alpha.7` from acp-go v0.12.1.
+
+- **Negotiation.** acp-go's `clientrouter` sends a v2 `initialize`. An agent that answers v1 continues on v1 under the router's rules (it reconnects with a fresh process when the v1 parameters differ). A v2 rejection is reported and never retried as v1.
+- **Capabilities.** A v2 connection advertises only terminal auth and form/URL input. v2 removed `fs/*` and `terminal/*`, so they are neither advertised nor served.
+- **Prompts and turns.** `session/prompt` returns as soon as the agent takes the message in (`messageId`); the turn ends at the next `state_update` `idle`, tracked with acp-go's `SessionTracker`. The prompt's `user_message` echo is matched to the local prompt by ID, before or after the acknowledgement. `requires_action` shows as "waiting on you". An `idle` with stop reason `_error` is a failed turn; its JSON-RPC error is read from `_meta` (`claudeCode.error`, `graff/error`). A `running` with no prompt from this client is a turn the agent started (codegraff's peer mail) and shows as work in progress until `idle`.
+- **Cancel.** Esc cancels pending permission requests through acp-go's `CancellablePermissions` and sends `session/cancel`; the turn ends at the agent's `idle` with `cancelled`. It also stops an agent-started turn.
+- **Messages.** `user_message`, `agent_message` and `agent_thought` upserts and their `*_chunk` appends are keyed by role and `messageId`, so a replayed message that is first cleared with empty content and then streamed again is rebuilt in place.
+- **Tools.** `tool_call_update` upserts with v2 patch semantics (omitted keeps, null clears) and `tool_call_content_chunk` appends. Structured file changes (`add`, `delete`, `modify`, `move`, `copy`) and their patch are kept with the tool call and shown as file rows and a colored patch in Ctrl+O. A permission request's `subject.toolCall` also updates the tool call, since Claude sends an edit's changes only there.
+- **Agent terminals.** `terminal_update` and `terminal_output_chunk` (base64) build a display-only terminal entry with command, output and exit status.
+- **Other updates.** `plan_update` checklists drive the live plan (Markdown plans show as a message, plan files as a notice) and `plan_removed` clears it. `notice`, `compaction_update` and `compaction_summary_chunk` show as notices. `usage_update`, `session_info_update`, `available_commands_update` and `config_option_update` work as in v1; modes are config options. Options that use the v1 key `id` instead of `configId` (codegraff 0.0.302) are accepted.
+- **Sessions.** `session/new` (with MCP servers through `v2/mcp`), `session/list` (an agent without it lists nothing), `session/resume` without replay when a local transcript exists, or `ResumeSessionFromStart` to rebuild one, `session/fork` when advertised, `session/close`, `session/delete`, `session/set_config_option`, `auth/login` and `auth/logout`. Steering is not used on v2.
+- **Subagents.** No agent sends them on v2 yet. When one does, `subagent_update` announces the child as in v1 and the child's `state_update` on its own session sets its state in the same child view.
+
+Tests run against fake agents built on acptest's draft-v2 `V2Agent` and acp-go's v2 agent runtime: prompt acknowledgement, idle ending the turn, `requires_action`, `_error` as a failure, cancel, resume from start, agent-started turns, file changes, agent terminals, child state, fallback to v1, and no v1 retry after a v2 rejection.
+
+Checked live on 2026-10-05:
+
+- codegraff 0.0.302.6 with `GRAFF_ACP_V2=1`: prompt acknowledgement, `user_message`, `running`, tool updates, `usage_update`, and `idle` ending the turn.
+- claude-agent-acp `main` (5598efb) with `CLAUDE_AGENT_ACP_EXPERIMENTAL_V2=1`: an agent terminal, `requires_action` around a Write permission (its diff kept with the tool call), `idle` ending the turn, and a resume from start that rebuilt the transcript. The released 0.85.1 has only the v2 handshake.
 
 ## Coverage review: 2026-09-26
 
@@ -89,7 +111,6 @@ The following features remain outside the implementation. Upstream status is rec
 | --- | --- |
 | Compaction lifecycle and summaries | [Preview](https://agentclientprotocol.com/rfds/session-compaction): no `compaction_update` / `compaction_summary_chunk` handling or advertised `session.compaction` capability. Agents can still expose a slash command or ordinary messages; context usage updates are supported. |
 | Structured advisory notices | [Preview](https://agentclientprotocol.com/rfds/session-notices): no advertised `session.notices` capability or dedicated `notice` update UI. Local client notices are separate from this protocol extension. |
-| ACP v2 | [Draft](https://agentclientprotocol.com/announcements/acp-v2-draft): no v2 negotiation, revised authentication, accepted-prompt/state lifecycle, message replacement or display-only terminal update surface. |
 | Remote agent transports | [Proposal in progress](https://agentclientprotocol.com/protocol/v1/transports): agents connect through stdio; no ACP Streamable HTTP or WebSocket connector. HTTP/SSE **MCP server configuration** is already supported and is a different transport boundary. |
 | Other proposed extensions | The [RFD index](https://agentclientprotocol.com/rfds/updates) lists draft plan operations, MCP-over-ACP/proxy chains, deletion-aware diffs, next-edit suggestions, configurable providers, end-turn token usage and authentication-state queries. These are not advertised or implemented. Native session fork and subagent sessions are the supported unstable exceptions. |
 | Richer terminal presentation | Images/audio are accepted and retained as content where supported, but displayed as labels. There is no inline bitmap display, audio player, editor follow-along view or simultaneous conversation UI. These are product capabilities rather than additional stable ACP methods. |

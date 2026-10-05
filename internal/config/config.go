@@ -16,13 +16,29 @@ type Command struct {
 	Command string            `json:"command"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
+	// Protocol is ProtocolV2 to request the ACP v2 draft. The agent may still
+	// answer v1, and the client then continues with v1.
+	Protocol string `json:"protocol,omitempty"`
 }
+
+// ProtocolV2 opts an agent into the ACP v2 draft.
+const ProtocolV2 = "v2"
 
 type Config struct {
 	DefaultAgent string             `json:"default_agent,omitempty"`
 	RegistryURL  string             `json:"registry_url,omitempty"`
 	Agents       map[string]Command `json:"agents,omitempty"`
 	Session      SessionOptions     `json:"session,omitempty"`
+	// ACPv2 is set by --acp-v2 and requests the v2 draft from any agent.
+	ACPv2 bool `json:"-"`
+}
+
+// Launch applies launch-wide settings to an agent command.
+func (c Config) Launch(command Command) Command {
+	if c.ACPv2 {
+		command.Protocol = ProtocolV2
+	}
+	return command
 }
 
 type SessionOptions struct {

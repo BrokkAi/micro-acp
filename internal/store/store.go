@@ -30,7 +30,38 @@ type Message struct {
 	// Sender and Recipient name the sessions of an inter-session message.
 	Sender    string `json:"sender,omitempty"`
 	Recipient string `json:"recipient,omitempty"`
+	// Changes and Patch are an ACP v2 tool call's structured file changes,
+	// which v1 tool content cannot hold.
+	Changes []FileChange `json:"changes,omitempty"`
+	Patch   string       `json:"patch,omitempty"`
 }
+
+// FileChange is one file an ACP v2 tool call added, deleted, modified, moved
+// or copied. OldPath is set for moves and copies.
+type FileChange struct {
+	Operation string `json:"operation"`
+	Path      string `json:"path"`
+	OldPath   string `json:"old_path,omitempty"`
+}
+
+// Label is the short verb shown beside the path.
+func (f FileChange) Label() string {
+	switch f.Operation {
+	case "add":
+		return "created"
+	case "delete":
+		return "deleted"
+	case "modify":
+		return "updated"
+	case "move":
+		return "moved from " + f.OldPath
+	case "copy":
+		return "copied from " + f.OldPath
+	}
+	return f.Operation
+}
+
+func (f FileChange) String() string { return f.Path + " · " + f.Label() }
 
 // Subagent is a child session an agent started. Its row in the parent
 // transcript is a message with role "subagent" and the child's ID.

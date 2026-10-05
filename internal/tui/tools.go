@@ -63,6 +63,9 @@ func summarizeTool(message store.Message) toolSummary {
 			}
 			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(part.Diff.Path), "\n", " "), label: label})
 		}
+		for _, change := range message.Changes {
+			summary.diffs = append(summary.diffs, toolDiff{path: strings.ReplaceAll(clean(change.Path), "\n", " "), label: clean(change.Label())})
+		}
 	} else if message.Text != "" {
 		summary.title = strings.Split(message.Text, "\n")[0]
 	}
@@ -107,13 +110,16 @@ func (m *model) toolView(message store.Message, details bool, width int) string 
 		if tool == nil {
 			return rendered + "\n" + m.toolText(message.Text, width) + "\n"
 		}
-		return rendered + "\n" + m.toolDetails(*tool, width) + "\n"
+		return rendered + "\n" + m.toolDetails(*tool, width) + m.fileChanges(message, width) + "\n"
 	}
 	rendered := markStyle.Render(summary.mark+" ") + titleStyle.Bold(true).Render(line(summary.title, width-2))
 	for _, diff := range summary.diffs {
 		style := m.theme.accent
-		if diff.label == "created" {
+		switch diff.label {
+		case "created":
 			style = m.theme.mint
+		case "deleted":
+			style = m.theme.danger
 		}
 		row := m.theme.cyan.Render(diff.path) + m.theme.muted.Render(" · ") + style.Render(diff.label) + m.theme.muted.Render(" · Ctrl+O for diff")
 		rendered += "\n  " + ansi.Truncate(row, width-2, "…")
@@ -183,6 +189,27 @@ func (m *model) toolDetails(tool schema.ToolCall, width int) string {
 	}
 	section("Result", m.toolRaw(tool.RawOutput, w))
 	return ansi.Hardwrap(strings.Join(sections, "\n\n"), width, true)
+}
+
+// fileChanges lists an ACP v2 tool call's structured file changes and shows
+// its patch with diff colors.
+func (m *model) fileChanges(message store.Message, width int) string {
+	if len(message.Changes) == 0 && message.Patch == "" {
+		return ""
+	}
+	w := max(1, width-4)
+	var rows []string
+	for _, change := range message.Changes {
+		rows = append(rows, m.theme.cyan.Render(ansi.Hardwrap(clean(change.Path), w, true))+m.theme.muted.Render(" · "+clean(change.Label())))
+	}
+	body := strings.Join(rows, "\n")
+	if message.Patch != "" {
+		if body != "" {
+			body += "\n"
+		}
+		body += m.toolLines(strings.TrimSuffix(message.Patch, "\n"), w, true)
+	}
+	return "\n\n  " + m.theme.muted.Bold(true).Render("Changes") + "\n" + indentTool(body, 4)
 }
 
 func indentTool(text string, spaces int) string {
