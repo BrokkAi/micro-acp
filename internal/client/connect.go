@@ -157,11 +157,27 @@ func (r *v1Route) Serve(ctx context.Context, conn *acp.Connection) error {
 		return err
 	}
 	r.ready <- routed{conn: conn, raw: raw}
+	r.c.holdRoute(ctx, conn)
+	return nil
+}
+
+// holdRoute keeps a routed connection open until the client stops or the
+// agent exits. The router closes the connection only after Serve returns, so
+// Serve has to notice a dead agent itself. The agent that answered initialize
+// is the current process.
+func (c *Client) holdRoute(ctx context.Context, conn *acp.Connection) {
+	c.mu.Lock()
+	process := c.process
+	c.mu.Unlock()
+	var exited <-chan struct{}
+	if process != nil {
+		exited = process.done
+	}
 	select {
 	case <-ctx.Done():
 	case <-conn.Done():
+	case <-exited:
 	}
-	return nil
 }
 
 // connectRouted asks for the ACP v2 draft through acp-go's client router. An

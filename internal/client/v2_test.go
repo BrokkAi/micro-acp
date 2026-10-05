@@ -64,7 +64,9 @@ func (a *v2TestAgent) SetConfigOption(_ context.Context, _ agent2.Client, r sche
 }
 
 func (a *v2TestAgent) ListSessions(_ context.Context, _ agent2.Client, r schema2.ListSessionsRequest) (schema2.ListSessionsResponse, error) {
-	return decode[schema2.ListSessionsResponse](`{"sessions":[{"sessionId":"remote-v2","cwd":"` + string(*r.Cwd) + `","title":"Remote v2"}]}`), nil
+	// Quote the path: Windows paths have backslashes.
+	cwd, _ := json.Marshal(string(*r.Cwd))
+	return decode[schema2.ListSessionsResponse](`{"sessions":[{"sessionId":"remote-v2","cwd":` + string(cwd) + `,"title":"Remote v2"}]}`), nil
 }
 
 func (a *v2TestAgent) DeleteSession(context.Context, agent2.Client, schema2.DeleteSessionRequest) (schema2.DeleteSessionResponse, error) {
@@ -168,6 +170,8 @@ func (a *v2TestAgent) Prompt(ctx context.Context, c agent2.Client, r schema2.Pro
 			}
 			notifyV2(ctx, c, "ghost", `{"sessionUpdate":"agent_message_chunk","messageId":"g","content":{"type":"text","text":"leaked"}}`)
 			idle("end_turn")
+		case "crash":
+			os.Exit(3)
 		case "fail":
 			send(`{"sessionUpdate":"notice","severity":"error","title":"The model is overloaded"}`)
 			send(`{"sessionUpdate":"state_update","state":"idle","stopReason":"_error","_meta":{"claudeCode":{"error":{"code":-32603,"message":"model overloaded"}}}}`)
@@ -354,6 +358,23 @@ func TestV2SubagentStateComesFromTheChildSession(t *testing.T) {
 	}
 	if got := roles(s.Messages); got != "user:child|subagent:Helper" {
 		t.Fatalf("parent transcript = %s", got)
+	}
+}
+
+func TestV2AgentExitEndsTheTurn(t *testing.T) {
+	c := openV2(t, "v2", t.TempDir())
+	require(t, c.New())
+	start := time.Now()
+	if _, err := c.Prompt("crash"); err == nil {
+		t.Fatal("a turn whose agent exited succeeded")
+	}
+	select {
+	case <-c.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("client never noticed the agent exited")
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Fatalf("noticing the exit took %s", time.Since(start))
 	}
 }
 

@@ -121,10 +121,7 @@ func (r *v2Route) Serve(ctx context.Context, conn *acpv2.Connection) error {
 	}
 	r.state.conn = conn
 	r.ready <- routed{conn: conn.Connection, v2: true, raw: raw}
-	select {
-	case <-ctx.Done():
-	case <-conn.Done():
-	}
+	r.c.holdRoute(ctx, conn.Connection)
 	return nil
 }
 
