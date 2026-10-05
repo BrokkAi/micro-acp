@@ -41,7 +41,7 @@ func (m *model) cropLines(s string, height int, tail bool) string {
 		hidden := len(lines) - max(1, height-1)
 		return m.theme.dim.Render(line(fmt.Sprintf("  … %d earlier lines · ctrl+o details", hidden), max(10, m.lineWidth()))) + "\n" + strings.Join(lines[len(lines)-max(1, height-1):], "\n")
 	}
-	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.dim.Render("  … /logs for details")
+	return strings.Join(lines[:max(1, height-1)], "\n") + "\n" + m.theme.dim.Render(line("  … /logs for details", max(1, m.lineWidth()-gutter)))
 }
 
 // listWindow returns the visible slice of a list that keeps index in view.
@@ -242,16 +242,19 @@ func (m *model) statusLine(w int) string {
 	} else if n > 1 {
 		label += fmt.Sprintf(" · %d subagents running", n)
 	}
+	// The label comes first: on a narrow line the trailer is dropped
+	// rather than cutting the label down to nothing.
 	trailer := " (" + elapsed(since) + " · esc to interrupt)"
-	label = line(label, max(1, w-gutter-ansi.StringWidth(trailer)))
+	tail := m.theme.dim.Render(" ("+elapsed(since)+" · ") + m.hintKey().Render("esc") + m.theme.dim.Render(" to interrupt)")
+	room := w - gutter - ansi.StringWidth(trailer)
+	if room < min(12, ansi.StringWidth(label)) {
+		tail, room = "", w-gutter
+	}
+	label = line(label, max(1, room))
 	text := m.shimmer(label, since)
 	mark := m.spinner.View()
 	if waiting {
 		text, mark = m.theme.amber.Render(label), m.theme.amber.Render("●")
-	}
-	tail := m.theme.dim.Render(" ("+elapsed(since)+" · ") + m.hintKey().Render("esc") + m.theme.dim.Render(" to interrupt)")
-	if ansi.StringWidth(label)+gutter+ansi.StringWidth(trailer) > w {
-		tail = ""
 	}
 	return mark + " " + text + tail
 }
@@ -283,6 +286,9 @@ func (m *model) footer(w int, modal bool) string {
 		status = m.configurationStatus(m.client.Agent, m.client.StatusFields(), inner)
 	}
 	if modal {
+		if status == "" {
+			return ""
+		}
 		return hang("  ", status)
 	}
 	hints := m.hints(inner, m.footerHints()...)
@@ -345,7 +351,7 @@ func (m *model) View() tea.View {
 			if n > 1 {
 				label = fmt.Sprintf("%d attachments", n)
 			}
-			badges = append(badges, m.theme.muted.Render("  + "+label)+m.theme.dim.Render(" · ")+m.hints(w, "/detach", "to clear"))
+			badges = append(badges, m.theme.muted.Render("  + "+label)+m.theme.dim.Render(" · ")+m.hints(max(1, w-ansi.StringWidth(label)-7), "/detach", "to clear"))
 		}
 		if queue := m.queueView(w); queue != "" {
 			badges = append(badges, queue)
@@ -421,7 +427,7 @@ func (m *model) View() tea.View {
 	}
 	var plan string
 	if !modal {
-		available := m.height - overhead
+		available := m.height - 1 - overhead
 		if m.live != "" {
 			available -= 3 // Leave room to follow the streaming response.
 		}

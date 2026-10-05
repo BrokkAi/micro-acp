@@ -1,21 +1,28 @@
 # README screenshots
 
-These PNGs were captured on 2026-09-26 from the v0.4.0 build of the running
-application. `agent-selection.png` uses the normal `micro-acp` startup with the
-live registry loaded and Codex highlighted, before connecting. Agent versions
-and the catalog reflect the capture date. The other images use `micro-acp
---demo`: its built-in agent communicates with the client over ACP and supplies
-the sample responses, settings, and dialogs.
+These PNGs were captured on 2026-10-05 from a development build of the running
+application. It was built with plain `go build`, so the version reads `dev`.
+`agent-selection.png` uses the normal `micro-acp` startup with the live
+registry loaded and Codex highlighted, before connecting. Agent versions and
+the catalog reflect the capture date. The other images use `micro-acp --demo`:
+its built-in agent communicates with the client over ACP and supplies the
+sample responses, settings, and dialogs.
 
-The binary ran in a 96-column, 32-row PTY connected to xterm.js 6.0.0. Chromium
-captured the terminal at 2× pixel density, using DejaVu Sans Mono at 16 px with
-1.35 line spacing, foreground `#DDE4EE`, and background `#111820`. The captures
-include all occupied terminal rows with 24 px of padding. Unused rows and the
-terminal emulator's scrollbar are outside the captured presentation; application
-text, layout, and colors are unchanged.
+The binary ran in a detached 96-column, 32-row tmux 3.5a pane with the
+environment shown below. Each screen was captured with
+`tmux capture-pane -p -e` and replayed into xterm.js 6.0.0, with the terminal
+cursor placed where tmux reported it. Chromium captured the terminal at 2× pixel
+density, using DejaVu Sans Mono at 16 px with 1.35 line spacing, foreground
+`#DDE4EE`, and background `#111820`. The tmux window style set the same
+colors, so tmux reported that background to micro-acp, which chose its dark
+palette and derived its tints from it. The
+captures include all occupied terminal rows with 24 px of padding. Unused rows
+and the terminal emulator's scrollbar are outside the captured presentation;
+application text, layout, and colors are unchanged.
 
-To recreate the screens, build with `make build` and start a fresh process for
-each capture from the repository root. Use an isolated state directory:
+To recreate the screens, build with `go build -o bin/micro-acp .` and start a
+fresh process for each capture from the repository root. Use an isolated state
+directory:
 
 ```sh
 capture_state=$(mktemp -d)

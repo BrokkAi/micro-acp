@@ -18,12 +18,12 @@ type palette struct {
 	// selection marks the focused row in lists; surface tints user turns.
 	// Tints are nil on terminals with 16 colors or fewer, where any
 	// background would be a harsh block.
-	selection          lipgloss.Style
-	selectBg, surface  color.Color
-	addBg, delBg       color.Color
-	accentHex, textHex string
-	hex                map[string]string
-	shimmer            []color.Color
+	selection         lipgloss.Style
+	selectBg, surface color.Color
+	addBg, delBg      color.Color
+	accentHex         string
+	hex               map[string]string
+	shimmer           []color.Color
 }
 
 // on is a style with background c, or no background when c is nil.
@@ -33,9 +33,6 @@ func on(c color.Color) lipgloss.Style {
 	}
 	return lipgloss.NewStyle().Background(c)
 }
-
-// Fallback backgrounds when the terminal does not report its own.
-const fallbackDark, fallbackLight = "#14181F", "#FFFFFF"
 
 func newPalette(dark bool, background color.Color, profile colorprofile.Profile) palette {
 	pick := func(light, darkHex string) string {
@@ -62,9 +59,6 @@ func newPalette(dark bool, background color.Color, profile colorprofile.Profile)
 		"text":   pick("#1F2937", "#DDE4EE"),
 	}
 	fg := func(name string) lipgloss.Style { return lipgloss.NewStyle().Foreground(lipgloss.Color(hex[name])) }
-	if background == nil {
-		background = lipgloss.Color(pick(fallbackLight, fallbackDark))
-	}
 	toward := lipgloss.Color(pick("#000000", "#FFFFFF"))
 	p := palette{
 		dark:      dark,
@@ -77,20 +71,21 @@ func newPalette(dark bool, background color.Color, profile colorprofile.Profile)
 		cyan:      fg("cyan"),
 		amber:     fg("amber"),
 		accentHex: hex["accent"],
-		textHex:   hex["text"],
 		hex:       hex,
-		surface:   blend(background, toward, amount(0.045, 0.07)),
-		selectBg:  blend(background, lipgloss.Color(hex["accent"]), amount(0.13, 0.2)),
-		addBg:     blend(background, lipgloss.Color(pick("#2DA44E", "#3FB950")), amount(0.16, 0.2)),
-		delBg:     blend(background, lipgloss.Color(pick("#CF222E", "#F85149")), amount(0.13, 0.2)),
 	}
-	if profile != colorprofile.Unknown && profile < colorprofile.ANSI256 {
-		p.surface, p.selectBg, p.addBg, p.delBg = nil, nil, nil, nil
+	// Tints are mixed into the real background. Without a reported one the
+	// light or dark guess may be wrong, and a tint behind the terminal's own
+	// text color could make it unreadable, so there are none.
+	if background != nil && (profile == colorprofile.Unknown || profile >= colorprofile.ANSI256) {
+		p.surface = blend(background, toward, amount(0.045, 0.07))
+		p.selectBg = blend(background, lipgloss.Color(hex["accent"]), amount(0.13, 0.2))
+		p.addBg = blend(background, lipgloss.Color(pick("#2DA44E", "#3FB950")), amount(0.16, 0.2))
+		p.delBg = blend(background, lipgloss.Color(pick("#CF222E", "#F85149")), amount(0.13, 0.2))
 	}
 	p.selection = p.accent.Bold(true).Inherit(on(p.selectBg))
 	// Status text rests at muted and brightens as a band passes over it.
 	// Coarser palettes would only flicker between a few steps.
-	if profile == colorprofile.Unknown || profile == colorprofile.TrueColor {
+	if background != nil && (profile == colorprofile.Unknown || profile == colorprofile.TrueColor) {
 		p.shimmer = lipgloss.Blend1D(6, lipgloss.Color(hex["muted"]), lipgloss.Color(hex["text"]))
 	}
 	return p
@@ -112,7 +107,6 @@ func (m *model) applyTheme(dark bool) {
 	styles.Focused.Placeholder = m.theme.dim
 	styles.Blurred.Prompt = m.theme.dim
 	styles.Blurred.Placeholder = m.theme.dim
-	styles.Cursor.Color = lipgloss.Color(m.theme.textHex)
 	m.input.SetStyles(styles)
 	m.spinner.Style = m.theme.accent
 	m.renderCache = map[string]string{}
@@ -165,9 +159,9 @@ func (p palette) markdownStyle(width int) ansi.StyleConfig {
 		Emph:           ansi.StylePrimitive{Italic: ptr(true)},
 		Strong:         ansi.StylePrimitive{Bold: ptr(true)},
 		HorizontalRule: ansi.StylePrimitive{Color: c("rule"), Format: "\n" + rule + "\n"},
-		Item:           ansi.StylePrimitive{BlockPrefix: paint("muted", "•") + " "},
-		Enumeration:    ansi.StylePrimitive{BlockPrefix: ". "},
-		Task:           ansi.StyleTask{Ticked: paint("mint", "✓") + " ", Unticked: paint("muted", "□") + " "},
+		Item:           ansi.StylePrimitive{BlockPrefix: listMark + paint("muted", "•") + " "},
+		Enumeration:    ansi.StylePrimitive{BlockPrefix: listMark + ". "},
+		Task:           ansi.StyleTask{Ticked: listMark + paint("mint", "✓") + " ", Unticked: listMark + paint("muted", "□") + " "},
 		Link:           ansi.StylePrimitive{Color: c("muted"), Underline: ptr(true)},
 		LinkText:       ansi.StylePrimitive{Color: c("accent")},
 		Image:          ansi.StylePrimitive{Color: c("muted"), Underline: ptr(true)},

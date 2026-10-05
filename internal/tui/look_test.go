@@ -75,6 +75,12 @@ func TestAssistantTextHangsUnderItsBullet(t *testing.T) {
 func TestUserTurnTintFitsItsText(t *testing.T) {
 	m := newModel(context.Background(), Options{})
 	m.width = 80
+	// A terminal that never reports its background gets no tint at all:
+	// the guess could put the terminal's own text on a clashing band.
+	if view := m.messageView(store.Message{Role: "user", Text: "short prompt"}, false, false); strings.Contains(view, "48;") {
+		t.Fatalf("tinted without a known background: %q", view)
+	}
+	m.Update(tea.BackgroundColorMsg{Color: color.RGBA{R: 20, G: 24, B: 31, A: 255}})
 	view := m.messageView(store.Message{Role: "user", Text: "short prompt"}, false, false)
 	first := strings.Split(view, "\n")[0]
 	if got := ansi.StringWidth(first); got != ansi.StringWidth("❯ short prompt")+1 {

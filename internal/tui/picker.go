@@ -6,7 +6,6 @@ import (
 
 	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/BrokkAi/micro-acp/internal/store"
 	"github.com/sahilm/fuzzy"
@@ -48,7 +47,6 @@ func (m *model) textInput() textinput.Model {
 	styles.Focused.Text = plain
 	styles.Blurred.Prompt = m.theme.dim
 	styles.Blurred.Placeholder = m.theme.dim
-	styles.Cursor.Color = lipgloss.Color(m.theme.textHex)
 	input.SetStyles(styles)
 	input.SetWidth(max(10, m.lineWidth()-gutter))
 	return input

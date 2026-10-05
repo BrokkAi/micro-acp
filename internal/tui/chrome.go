@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -51,8 +53,10 @@ func (m *model) hints(width int, pairs ...string) string {
 	return result
 }
 
+// hintKey styles primary text in the terminal's own foreground, which reads
+// on any background, light or dark.
 func (m *model) hintKey() lipgloss.Style {
-	return lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.textHex))
+	return lipgloss.NewStyle()
 }
 
 // titleRule draws "── Title ───── right ─" across width. The title carries the
@@ -177,51 +181,117 @@ func ago(t, now time.Time) string {
 	return t.Local().Format("Jan 2 2006")
 }
 
-var listMarker = regexp.MustCompile(`^( *)(• |\d+\. |✓ |□ )`)
+// listMark tags the markers glamour prints for list items and tasks, so only
+// real items are hung, never text that merely starts with "1. " or "✓ ".
+// Every marker that follows it is two cells wide.
+const listMark = ""
 
-// hangLists re-wraps list items so their wrapped lines hang under the item
-// text instead of returning to the bullet's column, which glamour cannot do.
-// A continuation is a non-blank line at the bullet's own indentation that
-// does not start another item; deeper lines, such as code, are left alone.
-func hangLists(rendered string, width int) string {
+// hangLists indents the wrapped lines of list items so they hang under the
+// item text instead of returning to the bullet's column, which glamour
+// cannot do. A continuation is a non-blank line at the item's own
+// indentation; deeper lines, such as code, are left alone. Lines are only
+// shifted, never joined, so hard breaks and long words survive. It reports
+// how much narrower to render so every continuation fits.
+func hangLists(rendered string, width int) (string, int) {
+	if !strings.Contains(rendered, listMark) {
+		return rendered, 0
+	}
 	lines := strings.Split(rendered, "\n")
-	out := make([]string, 0, len(lines))
-	for i := 0; i < len(lines); i++ {
-		plain := ansi.Strip(lines[i])
-		match := listMarker.FindStringSubmatchIndex(plain)
-		if match == nil {
-			out = append(out, lines[i])
+	need := 0
+	for i := range lines {
+		last := strings.LastIndex(lines[i], listMark)
+		if last < 0 {
 			continue
 		}
-		indent, column := match[3]-match[2], ansi.StringWidth(plain[:match[1]])
-		end := i + 1
-		for end < len(lines) {
-			next := ansi.Strip(lines[end])
-			lead := len(next) - len(strings.TrimLeft(next, " "))
-			if strings.TrimSpace(next) == "" || lead != indent || listMarker.MatchString(next) {
+		column := ansi.StringWidth(strings.ReplaceAll(lines[i][:last], listMark, "")) + 2
+		lines[i] = strings.ReplaceAll(lines[i], listMark, "")
+		plain := ansi.Strip(lines[i])
+		indent := len(plain) - len(strings.TrimLeft(plain, " "))
+		shift := column - indent
+		for j := i + 1; j < len(lines) && !strings.Contains(lines[j], listMark); j++ {
+			next := ansi.Strip(lines[j])
+			if strings.TrimSpace(next) == "" || len(next)-len(strings.TrimLeft(next, " ")) != indent {
 				break
 			}
-			end++
+			if ansi.StringWidth(lines[j])+shift > width {
+				need = max(need, shift)
+				continue
+			}
+			lines[j] = strings.Repeat(" ", shift) + lines[j]
 		}
-		if end == i+1 || width-column < 8 {
-			out = append(out, lines[i])
+	}
+	return strings.Join(lines, "\n"), need
+}
+
+// plainSGR accepts the style parameters the renderer itself uses. Blink and
+// conceal never come from it, so they can only be smuggled in by agent text.
+func plainSGR(params string) bool {
+	if strings.Trim(params, "0123456789;:") != "" {
+		return false
+	}
+	fields := strings.Split(params, ";")
+	for i := 0; i < len(fields); i++ {
+		switch fields[i] {
+		case "38", "48", "58":
+			if i+1 < len(fields) && fields[i+1] == "5" {
+				i += 2
+			} else if i+1 < len(fields) && fields[i+1] == "2" {
+				i += 4
+			}
+		case "5", "6", "8":
+			return false
+		}
+	}
+	return true
+}
+
+// keepEscapes drops every escape sequence except colors (SGR) and
+// hyperlinks (OSC 8), plus other control characters. Markdown decodes
+// character references such as &#27; after the text was cleaned, so the
+// rendered output is filtered again before it reaches the terminal.
+func keepEscapes(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); {
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == '[' {
+			j := i + 2
+			for j < len(s) && (s[j] < 0x40 || s[j] > 0x7e) {
+				j++
+			}
+			if j < len(s) && s[j] == 'm' && plainSGR(s[i+2:j]) {
+				b.WriteString(s[i : j+1])
+			}
+			i = j + 1
 			continue
 		}
-		text := ansi.Cut(lines[i], column, ansi.StringWidth(lines[i]))
-		for _, next := range lines[i+1 : end] {
-			text += " " + ansi.Cut(next, indent, ansi.StringWidth(next))
-		}
-		pad := strings.Repeat(" ", column)
-		for j, row := range strings.Split(ansi.Wrap(text, width-column, ""), "\n") {
-			if j == 0 {
-				out = append(out, ansi.Cut(lines[i], 0, column)+row)
-			} else {
-				out = append(out, pad+row)
+		if s[i] == 0x1b && i+1 < len(s) && s[i+1] == ']' {
+			end, size := -1, 0
+			for j := i + 2; j < len(s); j++ {
+				if s[j] == 0x07 {
+					end, size = j, 1
+					break
+				}
+				if s[j] == 0x1b && j+1 < len(s) && s[j+1] == '\\' {
+					end, size = j, 2
+					break
+				}
 			}
+			if end < 0 {
+				i += 2
+				continue
+			}
+			if strings.HasPrefix(s[i+2:end], "8;") && !strings.ContainsFunc(s[i+2:end], unicode.IsControl) {
+				b.WriteString(s[i : end+size])
+			}
+			i = end + size
+			continue
 		}
-		i = end - 1
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == '\n' || r == '\t' || !unicode.IsControl(r) {
+			b.WriteString(s[i : i+size])
+		}
+		i += size
 	}
-	return strings.Join(out, "\n")
+	return b.String()
 }
 
 var trailingBlank = regexp.MustCompile(`(?:[ \t]|\x1b\[[0-9;:]*m)+$`)

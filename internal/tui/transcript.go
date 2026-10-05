@@ -24,6 +24,20 @@ func (m *model) markdown(text string, width int) string {
 	if cached, ok := m.renderCache[key]; ok {
 		return cached
 	}
+	rendered, need := hangLists(m.renderMarkdown(text, width), width)
+	if need > 0 {
+		// Wrapped list items need room to hang; render a little narrower.
+		rendered, _ = hangLists(m.renderMarkdown(text, max(12, width-need)), width)
+	}
+	if len(m.renderCache) > 128 {
+		m.renderCache = map[string]string{}
+	}
+	m.renderCache[key] = rendered
+	return rendered
+}
+
+func (m *model) renderMarkdown(text string, width int) string {
+	text = strings.ReplaceAll(clean(text), listMark, "")
 	renderer, ok := m.renderers[width]
 	var err error
 	if !ok {
@@ -34,20 +48,15 @@ func (m *model) markdown(text string, width int) string {
 	}
 	rendered := ""
 	if err == nil {
-		rendered, err = renderer.Render(clean(text))
+		rendered, err = renderer.Render(text)
 	}
 	if err != nil {
-		rendered = ansi.Hardwrap(clean(text), width, true)
+		rendered = ansi.Hardwrap(text, width, true)
 	}
 	// Glamour pads every line to the wrap width and frames blocks with blank
 	// lines. Streaming renders one paragraph at a time, so remove both and
 	// let the transcript decide the spacing.
-	rendered = hangLists(trimRight(rendered), width)
-	if len(m.renderCache) > 128 {
-		m.renderCache = map[string]string{}
-	}
-	m.renderCache[key] = rendered
-	return rendered
+	return trimRight(keepEscapes(rendered))
 }
 
 // band renders a tinted row padded to width. Every segment carries the
@@ -87,7 +96,7 @@ func (m *model) messageView(message store.Message, details bool, continuation bo
 		// The tint is sized to the text rather than the window, so it still
 		// reads as one block after the terminal is resized.
 		full := m.lineWidth()
-		lines := strings.Split(ansi.Wrap(strings.TrimRight(text, "\n"), max(8, width-1), ""), "\n")
+		lines := strings.Split(ansi.Wrap(strings.TrimRight(strings.ReplaceAll(text, "\t", "    "), "\n"), max(8, width-1), ""), "\n")
 		bandWidth := 0
 		for i, row := range lines {
 			lines[i] = ansi.Truncate(row, full-gutter-1, "…")
@@ -177,7 +186,9 @@ func (m *model) syncTranscript() {
 	}
 	// Session operations can replay several chunks into the same message.
 	// Wait for completion before committing that history to scrollback.
-	if m.busy && !m.prompting {
+	// Until the theme is known, nothing is rendered: scrollback cannot be
+	// restyled once printed.
+	if m.busy && !m.prompting || m.headerPending {
 		return
 	}
 	s, _ := m.client.Snapshot()
@@ -298,7 +309,8 @@ func (m *model) syncTranscript() {
 			continue
 		}
 		if current, _ := m.rowSignature(message); current != committed {
-			m.reprinting = true
+			// A subagent's task line is shown again only when it changed.
+			m.reprinting = message.Role == "subagent" && subagentTask(current) == subagentTask(committed)
 			m.printMessage(message, false)
 			m.reprinting = false
 			m.committedTools[i] = current

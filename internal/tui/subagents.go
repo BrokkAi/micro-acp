@@ -48,7 +48,16 @@ func (m *model) subagentStyle(child store.Subagent) lipgloss.Style {
 // can reprint the row when it changes.
 func (m *model) subagentSignature(message store.Message) string {
 	child := m.subagents[message.ID]
-	return subagentName(child) + "\n" + child.StateLabel() + "\n" + child.Description
+	return subagentName(child) + "\x00" + child.StateLabel() + "\x00" + child.Description
+}
+
+// subagentTask is the description part of a subagent signature.
+func subagentTask(signature string) string {
+	parts := strings.SplitN(signature, "\x00", 3)
+	if len(parts) < 3 {
+		return ""
+	}
+	return parts[2]
 }
 
 func (m *model) subagentView(message store.Message, details bool, width int) string {

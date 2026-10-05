@@ -150,8 +150,9 @@ type model struct {
 	background color.Color
 	profile    colorprofile.Profile
 	// headerPending holds scrollback until the theme is known, so the first
-	// lines are not printed in the wrong palette.
+	// lines are not printed in the wrong palette; heldWarnings wait with it.
 	headerPending bool
+	heldWarnings  []string
 	// lastRow is whether the newest scrollback entry was a compact row.
 	lastRow bool
 	// activity names the running tool or plan step for the status line.
@@ -219,6 +220,21 @@ func (m *model) printHeader() {
 	}
 	m.headerPending = false
 	m.printQueue = append([]string{m.header()}, m.printQueue...)
+	for _, warning := range m.heldWarnings {
+		m.printWarning(warning)
+	}
+	m.heldWarnings = nil
+}
+
+// printWarning adds a warning to scrollback, holding it until the theme is
+// known so it is not printed in the wrong colors.
+func (m *model) printWarning(text string) {
+	if m.headerPending {
+		m.heldWarnings = append(m.heldWarnings, text)
+		return
+	}
+	m.queueOutput(hang(m.theme.amber.Render("!")+" ", m.theme.muted.Render(ansi.Wrap(clean(text), m.proseWidth(), ""))))
+	m.lastRow = true
 }
 func (m *model) Init() tea.Cmd {
 	// Ask for the background so tints and contrast match the terminal; print
@@ -422,7 +438,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 		}
 		if m.catalog.Warning != "" {
-			m.queueOutput(hang(m.theme.amber.Render("!")+" ", m.theme.muted.Render(ansi.Wrap(clean(m.catalog.Warning), m.proseWidth(), ""))))
+			m.printWarning(m.catalog.Warning)
 		}
 		if !m.started && m.options.Agent != "" {
 			m.started = true
@@ -475,9 +491,6 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
-		if m.steering != nil {
-			m.busy = true
-		}
 		if msg.prompt {
 			m.filesLoaded = false
 		}
@@ -513,11 +526,18 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 				m.queuePaused = true
 			}
 		}
+		// Commit the finished turn before anything else so the stop marker
+		// follows its last line.
 		m.syncTranscript()
 		if msg.prompt && msg.err == nil && msg.reason != "" && msg.reason != schema.StopReasonEndTurn {
-			// Mark where an interrupted reply ends in scrollback.
-			m.queueOutput(m.theme.dim.Render("  └ " + m.status))
+			// Mark where an interrupted reply ends in scrollback. The
+			// reason may come from the agent, so it is cleaned and bounded.
+			m.queueOutput(m.theme.dim.Render("  └ " + line(m.status, max(1, m.lineWidth()-4))))
 			m.lastRow = true
+		}
+		// A steer still in flight keeps the client busy until it is answered.
+		if m.steering != nil {
+			m.busy = true
 		}
 		m.rebuildHistory()
 		if msg.prompt && msg.err == nil {
