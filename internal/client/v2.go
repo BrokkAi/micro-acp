@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	acp "github.com/BrokkAi/acp-go"
 	"github.com/BrokkAi/acp-go/schema"
@@ -110,7 +109,7 @@ func (r *v2Route) Serve(ctx context.Context, conn *acpv2.Connection) error {
 	if r.elicitation {
 		capabilities.Elicitation = acpv2.ElicitationClientCapabilities(true, true)
 	}
-	setup, stop := context.WithTimeout(ctx, 45*time.Second)
+	setup, stop := context.WithTimeout(ctx, agentStartupTimeout)
 	var raw json.RawMessage
 	err := conn.Call(setup, schema2.InitializeMethodName, schema2.InitializeRequest{
 		Capabilities: &capabilities, Info: schema2.Implementation{Name: "micro-acp", Version: buildinfo.Version}, ProtocolVersion: acpv2.Version,

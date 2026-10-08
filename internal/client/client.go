@@ -123,7 +123,7 @@ func OpenInteractive(parent context.Context, agent, cwd string, command config.C
 		}
 	}
 	go func() { <-ctx.Done(); c.Close() }()
-	setup, stop := context.WithTimeout(ctx, 45*time.Second)
+	setup, stop := context.WithTimeout(ctx, agentStartupTimeout)
 	defer stop()
 	if command.Protocol == config.ProtocolV2 {
 		_, err = c.connectRouted(setup, interactions)

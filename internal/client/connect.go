@@ -18,6 +18,14 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/buildinfo"
 )
 
+// agentStartupTimeout bounds process launch plus the initialize handshake.
+// Starting an agent often means a first-time package install (npx --yes,
+// uvx, or a binary download) on a cold cache, which routinely takes minutes;
+// the deadline has to survive that, not just a warm process spawn. A hung
+// agent stays interruptible, and a dead one is still noticed through the
+// process and connection watchers, so generosity here only costs patience.
+const agentStartupTimeout = 10 * time.Minute
+
 // agentProcess is one running agent command. Reads and writes go to its
 // stdout and stdin; Close stops it and waits for it to exit.
 type agentProcess struct {
@@ -150,7 +158,7 @@ func (r *v1Route) NotificationHandler() acp.Notifications { return r.c.notificat
 // Serve initializes v1 and holds the connection open. The router closes
 // connections it probes and discards, which ends Serve with an error.
 func (r *v1Route) Serve(ctx context.Context, conn *acp.Connection) error {
-	setup, stop := context.WithTimeout(ctx, 45*time.Second)
+	setup, stop := context.WithTimeout(ctx, agentStartupTimeout)
 	raw, err := initializeV1(setup, conn, r.caps)
 	stop()
 	if err != nil {
