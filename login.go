@@ -115,11 +115,18 @@ func runLogin(ctx context.Context, opts loginOptions, args []string, out, errOut
 		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 		fmt.Fprintln(w, "METHOD\tNAME\tKIND\tDESCRIPTION")
 		for _, choice := range choices {
-			kind := "agent"
-			if choice.Terminal {
-				kind = "terminal"
+			kind := choice.Kind
+			if kind == "" {
+				kind = "agent"
+				if choice.Terminal {
+					kind = "terminal"
+				}
 			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", choice.ID, choice.Name, kind, choice.Description)
+			description := choice.Description
+			if choice.Kind == client.AuthKindEnv {
+				description = "Set " + envVarNames(choice.Vars) + " on the agent process · " + description
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", choice.ID, choice.Name, kind, description)
 		}
 		return w.Flush()
 	}
@@ -152,6 +159,14 @@ func runLogin(ctx context.Context, opts loginOptions, args []string, out, errOut
 		return fmt.Errorf("login %s: %w", choice.ID, err)
 	}
 	return nil
+}
+
+func envVarNames(vars []client.AuthEnvVar) string {
+	names := make([]string, 0, len(vars))
+	for _, v := range vars {
+		names = append(names, v.Name)
+	}
+	return strings.Join(names, ", ")
 }
 
 func methodHint(choices []client.AuthChoice) string {

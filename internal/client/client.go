@@ -35,7 +35,10 @@ type Permission struct {
 type Client struct {
 	Agent, Cwd string
 	Init       acp.Initialization
-	CanFork    bool
+	// envAuth holds the env_var authentication methods from the initialize
+	// response, which this acp-go release cannot decode into Init.
+	envAuth []EnvAuthMethod
+	CanFork bool
 	// Subagents reports that the agent advertised subagent sessions.
 	Subagents bool
 	// Ephemeral suppresses local session persistence for headless runs. Set it
@@ -707,6 +710,14 @@ func (c *Client) Authenticate(method string) error {
 	defer cancel()
 	if c.v2 != nil {
 		return c.v2.conn.AuthLogin(ctx, c.v2.init, method)
+	}
+	// Env_var methods are satisfied by the environment the agent was started
+	// with, so authenticate only checks the credentials are configured.
+	for _, m := range c.envAuth {
+		if m.ID == method {
+			var result schema.AuthenticateResponse
+			return c.conn.Call(ctx, schema.AuthenticateMethodName, schema.AuthenticateRequest{MethodID: schema.AuthMethodId(method)}, &result)
+		}
 	}
 	return c.conn.Authenticate(ctx, c.Init, method)
 }

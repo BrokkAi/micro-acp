@@ -55,6 +55,16 @@ func TestAgentProcess(t *testing.T) {
 		<-ready
 		switch method {
 		case "initialize":
+			if mode == "env-auth" {
+				return map[string]any{
+					"protocolVersion": 1,
+					"authMethods": []any{
+						map[string]any{"type": "terminal", "id": "test-login", "name": "Test login", "args": []string{"login"}},
+						map[string]any{"type": "env_var", "id": "test-api-key", "name": "Test API key", "description": "Set TEST_API_KEY for headless use.", "vars": []any{map[string]any{"name": "MICRO_ACP_TEST_API_KEY", "label": "Test API key"}}, "link": "https://example.com/keys"},
+					},
+					"agentCapabilities": map[string]any{},
+				}, nil
+			}
 			if mode == "version" {
 				var request schema.InitializeRequest
 				if err := json.Unmarshal(raw, &request); err != nil {
@@ -68,6 +78,23 @@ func TestAgentProcess(t *testing.T) {
 				return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"loadSession": true, "sessionCapabilities": map[string]any{"fork": map[string]any{}, "resume": map[string]any{}}}}, nil
 			}
 			return map[string]any{"protocolVersion": 1, "agentCapabilities": map[string]any{"sessionCapabilities": map[string]any{"fork": map[string]any{}}}}, nil
+		case "authenticate":
+			if mode == "env-auth" {
+				var p struct {
+					MethodID string `json:"methodId"`
+				}
+				if err := json.Unmarshal(raw, &p); err != nil {
+					return nil, err
+				}
+				if p.MethodID != "test-api-key" {
+					return nil, &acp.RPCError{Code: -32602, Message: "unknown auth method: " + p.MethodID}
+				}
+				if os.Getenv("MICRO_ACP_TEST_API_KEY") == "" {
+					return nil, &acp.RPCError{Code: acp.ErrorCodeAuthRequired, Message: "MICRO_ACP_TEST_API_KEY is not set in the adapter environment"}
+				}
+				return map[string]any{}, nil
+			}
+			return nil, &acp.RPCError{Code: -32601, Message: "not supported"}
 		case "session/new":
 			return schema.NewSessionResponse{SessionID: schema.SessionId(fmt.Sprintf("native-%d", seq.Add(1)))}, nil
 		case "session/resume":

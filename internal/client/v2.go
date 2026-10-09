@@ -183,6 +183,12 @@ func (c *Client) useV2Initialization(raw json.RawMessage) error {
 				env[variable.Name] = variable.Value
 			}
 			c.Init.AuthMethods = append(c.Init.AuthMethods, schema.AuthMethod{Terminal: &schema.AuthMethodTerminal{ID: schema.AuthMethodId(m.MethodID), Name: m.Name, Description: nullableText(m.Description), Args: m.Args, Env: env}})
+		case method.Other != nil:
+			// v2 preserves unrecognized methods verbatim; recover the
+			// env_var ones so they stay usable login choices.
+			if parsed, err := parseEnvAuthMethod(method.Other.Raw); err == nil {
+				c.envAuth = append(c.envAuth, parsed)
+			}
 		}
 	}
 	if extended.Capabilities != nil && extended.Capabilities.Session != nil {

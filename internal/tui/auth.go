@@ -2,6 +2,9 @@ package tui
 
 import (
 	tea "charm.land/bubbletea/v2"
+	"strings"
+
+	"github.com/BrokkAi/micro-acp/internal/client"
 )
 
 type authDoneMsg struct {
@@ -15,6 +18,13 @@ func (m *model) openAuth() {
 		description := choice.Description
 		if choice.Terminal {
 			description = "Interactive terminal login · " + description
+		}
+		if choice.Kind == client.AuthKindEnv {
+			names := make([]string, 0, len(choice.Vars))
+			for _, v := range choice.Vars {
+				names = append(names, v.Name)
+			}
+			description = "Set " + strings.Join(names, ", ") + " on the agent process · " + description
 		}
 		entries = append(entries, item{title: choice.Name, description: description, id: choice.ID})
 	}

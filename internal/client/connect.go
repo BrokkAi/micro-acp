@@ -116,9 +116,14 @@ func initializeV1(ctx context.Context, conn *acp.Connection, caps unstable.Clien
 }
 
 func (c *Client) useV1Initialization(raw json.RawMessage) error {
-	if err := json.Unmarshal(raw, &c.Init); err != nil {
+	filtered, env, err := splitAuthMethods(raw)
+	if err != nil {
 		return err
 	}
+	if err := json.Unmarshal(filtered, &c.Init); err != nil {
+		return err
+	}
+	c.envAuth = env
 	if c.Init.ProtocolVersion != acp.Version {
 		return fmt.Errorf("agent selected unsupported ACP version %d", c.Init.ProtocolVersion)
 	}
