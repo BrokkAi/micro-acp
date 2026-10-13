@@ -98,6 +98,28 @@ func (c *Client) Configure(kind, value string) error {
 	return fmt.Errorf("agent does not offer %s selection", kind)
 }
 
+// RefreshModels recovers a model selector that offers only the current
+// model, as an agent with an incomplete startup catalog can report. ACP
+// has no config read, so it re-sets the current value; the response must
+// carry the agent's full current options. It reports whether it refreshed.
+func (c *Client) RefreshModels() (bool, error) {
+	for _, s := range c.Selectors() {
+		if s.Category != "model" || s.Boolean {
+			continue
+		}
+		if len(s.Choices) > 1 {
+			return false, nil
+		}
+		for _, choice := range s.Choices {
+			if choice.Value == s.Current {
+				return true, c.SetConfig(s.ID, s.Current)
+			}
+		}
+		return false, nil
+	}
+	return false, nil
+}
+
 func (c *Client) SetConfig(id, value string) error {
 	c.op.Lock()
 	defer c.op.Unlock()

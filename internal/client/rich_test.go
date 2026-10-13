@@ -27,13 +27,25 @@ func serveRichAgent() {
 		return map[string]any{"currentModeId": mode, "availableModes": []any{map[string]any{"id": "ask", "name": "Ask"}, map[string]any{"id": "code", "name": "Code"}}}
 	}
 	var sessionRequest schema.NewSessionRequest
+	// Thin mode simulates an agent whose startup catalog is incomplete: the
+	// model selector offers only the current model until the next config
+	// read, which a set_config_option round trip performs.
+	thin := os.Getenv("MICRO_ACP_TEST_THIN_MODELS") == "1"
 	options := func() []any {
 		levels := []any{map[string]any{"value": "low", "name": "Low"}}
 		if model == "deep" {
 			levels = append(levels, map[string]any{"value": "high", "name": "High"})
 		}
+		models := []any{map[string]any{"value": "fast", "name": "Fast"}, map[string]any{"value": "deep", "name": "Deep"}}
+		if thin {
+			for _, entry := range models {
+				if entry.(map[string]any)["value"] == model {
+					models = []any{entry}
+				}
+			}
+		}
 		return []any{
-			map[string]any{"id": "engine", "name": "Model", "category": "model", "type": "select", "currentValue": model, "options": []any{map[string]any{"group": "provider", "name": "Provider", "options": []any{map[string]any{"value": "fast", "name": "Fast"}, map[string]any{"value": "deep", "name": "Deep"}}}}},
+			map[string]any{"id": "engine", "name": "Model", "category": "model", "type": "select", "currentValue": model, "options": []any{map[string]any{"group": "provider", "name": "Provider", "options": models}}},
 			map[string]any{"id": "effort", "name": "Reasoning", "category": "thought_level", "type": "select", "currentValue": effort, "options": levels},
 			map[string]any{"id": "review", "name": "Review", "type": "boolean", "currentValue": toggle},
 		}
@@ -112,6 +124,7 @@ func serveRichAgent() {
 			case "review":
 				toggle = p.Value.(bool)
 			}
+			thin = false
 			return map[string]any{"configOptions": options()}, nil
 		case "logout", "session/close":
 			return map[string]any{}, nil
@@ -397,6 +410,42 @@ func TestAgentCancelsElicitationAndNextTurnWorks(t *testing.T) {
 	require(t, <-done)
 	_, err := c.Prompt("next turn")
 	require(t, err)
+}
+
+// An agent whose startup catalog is incomplete can report a model
+// selector holding only the current model. RefreshModels must pull the
+// agent's current full list, and must not disturb a complete list.
+func TestRefreshModelsRecoversThinStartupList(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	c, err := client.Open(ctx, "rich", t.TempDir(), config.Command{Command: os.Args[0], Args: []string{"-test.run=^TestAgentProcess$"}, Env: map[string]string{"MICRO_ACP_TEST_HELPER": "rich", "MICRO_ACP_TEST_THIN_MODELS": "1"}}, store.Store{Directory: t.TempDir()})
+	require(t, err)
+	defer c.Shutdown()
+	require(t, c.New())
+	models := func() []client.Choice {
+		for _, s := range c.Selectors() {
+			if s.Category == "model" {
+				return s.Choices
+			}
+		}
+		return nil
+	}
+	if got := models(); len(got) != 1 || got[0].Value != "fast" {
+		t.Fatalf("startup model list = %+v, want only the current model", got)
+	}
+	changed, err := c.RefreshModels()
+	require(t, err)
+	if !changed {
+		t.Fatal("RefreshModels reported no refresh for a thin list")
+	}
+	if got := models(); len(got) != 2 {
+		t.Fatalf("refreshed model list = %+v, want fast and deep", got)
+	}
+	changed, err = c.RefreshModels()
+	require(t, err)
+	if changed {
+		t.Fatal("RefreshModels refreshed a complete list")
+	}
 }
 
 func TestResumeKeepsLocalTranscriptAndRefreshesState(t *testing.T) {

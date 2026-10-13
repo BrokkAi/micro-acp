@@ -142,8 +142,7 @@ func (m *model) command(text string) tea.Cmd {
 		return m.authenticate(arg)
 	case "/mode", "/model", "/effort":
 		if arg == "" {
-			m.openSettings(name[1:])
-			return nil
+			return m.openSettings(name[1:])
 		}
 		return m.perform("Updating "+name[1:]+"…", func() error { return c.Configure(name[1:], arg) })
 	case "/config", "/settings":

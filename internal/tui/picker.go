@@ -90,7 +90,7 @@ func (m *model) pickerKey(msg tea.KeyPressMsg) tea.Cmd {
 			m.resumeTarget = &s
 			return m.perform("Resuming session", func() error { return m.client.Load(s) })
 		case "settings":
-			m.chooseSetting(selected.value.(client.Selector))
+			return m.chooseSetting(selected.value.(client.Selector))
 		case "choices":
 			c, id, value := m.client, m.selector.ID, selected.id
 			return m.perform("Updating "+m.selector.Name, func() error { return c.SetConfig(id, value) })

@@ -58,8 +58,7 @@ func (m *model) configureSession(arg string) tea.Cmd {
 		}
 		value = strings.TrimSpace(value)
 		if !hasValue || value == "" {
-			m.chooseSetting(s)
-			return nil
+			return m.chooseSetting(s)
 		}
 		c := m.client
 		return m.perform("Updating "+s.Name, func() error { return c.SetConfig(id, value) })
@@ -68,7 +67,7 @@ func (m *model) configureSession(arg string) tea.Cmd {
 	return nil
 }
 
-func (m *model) openSettings(category string) {
+func (m *model) openSettings(category string) (cmd tea.Cmd) {
 	if category == "effort" {
 		category = "thought_level"
 	}
@@ -81,15 +80,22 @@ func (m *model) openSettings(category string) {
 		return
 	}
 	if category != "" && len(entries) == 1 {
-		m.chooseSetting(entries[0].value.(client.Selector))
-		return
+		return m.chooseSetting(entries[0].value.(client.Selector))
 	}
 	m.openPicker("settings", entries)
 	m.picker.category = category
+	return nil
 }
 
-func (m *model) chooseSetting(s client.Selector) {
+func (m *model) chooseSetting(s client.Selector) (cmd tea.Cmd) {
 	m.selector = s
+	// A model list holding only the current model may be an agent's
+	// incomplete startup catalog; refresh it while the picker is open.
+	// The picker picks up the fuller list when it arrives.
+	if s.Category == "model" && len(s.Choices) <= 1 && m.client != nil {
+		c := m.client
+		cmd = func() tea.Msg { _, _ = c.RefreshModels(); return nil }
+	}
 	m.openPicker("choices", choiceItems(s))
 	for i, e := range m.picker.matches {
 		if e.id == s.Current {
@@ -97,6 +103,7 @@ func (m *model) chooseSetting(s client.Selector) {
 			break
 		}
 	}
+	return
 }
 
 // Configuration notifications can replace options, values, and even entire
