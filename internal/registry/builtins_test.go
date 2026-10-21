@@ -42,12 +42,12 @@ func fakeCommand(t *testing.T, dir, name string) {
 }
 
 func TestBuiltinCatalogAndRegistryPrecedence(t *testing.T) {
-	if got := WithBuiltins(nil); len(got) != 3 {
+	if got := WithBuiltins(nil); len(got) != 4 {
 		t.Fatalf("catalog: %+v", got)
 	}
 	registered := Agent{ID: "anvil", Name: "Published Anvil", Version: "42"}
 	got := WithBuiltins([]Agent{registered})
-	if len(got) != 3 {
+	if len(got) != 4 {
 		t.Fatalf("duplicate agent: %+v", got)
 	}
 	for _, a := range got {
@@ -83,10 +83,11 @@ func releaseMetadata(tag, name, url, digest string) []byte {
 
 func TestBuiltinReleasePlatformLayouts(t *testing.T) {
 	for _, test := range []struct{ id, platform, archive, command string }{
-		{"draupnir", "linux-x86_64", "brokk-draupnir-v1.2.3-x86_64-unknown-linux-gnu.zip", "draupnir"},
-		{"draupnir", "linux-aarch64", "brokk-draupnir-v1.2.3-aarch64-unknown-linux-gnu.zip", "draupnir"},
-		{"draupnir", "darwin-x86_64", "brokk-draupnir-v1.2.3-universal-apple-darwin.zip", "draupnir"},
-		{"draupnir", "darwin-aarch64", "brokk-draupnir-v1.2.3-universal-apple-darwin.zip", "draupnir"},
+		{"draupnir", "linux-x86_64", "brokk-draupnir-v1.2.3-x86_64-unknown-linux-gnu.zip", "brokk-draupnir-v1.2.3-x86_64-unknown-linux-gnu/draupnir"},
+		{"draupnir", "linux-aarch64", "brokk-draupnir-v1.2.3-aarch64-unknown-linux-gnu.zip", "brokk-draupnir-v1.2.3-aarch64-unknown-linux-gnu/draupnir"},
+		{"draupnir", "darwin-x86_64", "brokk-draupnir-v1.2.3-universal-apple-darwin.zip", "brokk-draupnir-v1.2.3-universal-apple-darwin/draupnir"},
+		{"draupnir", "darwin-aarch64", "brokk-draupnir-v1.2.3-universal-apple-darwin.zip", "brokk-draupnir-v1.2.3-universal-apple-darwin/draupnir"},
+		{"dsh-acp", "linux-x86_64", "dsh-acp-v1.2.3-x86_64-unknown-linux-gnu.tar.gz", "dsh-acp"},
 	} {
 		t.Run(test.id+"/"+test.platform, func(t *testing.T) {
 			var release githubRelease
@@ -98,8 +99,7 @@ func TestBuiltinReleasePlatformLayouts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			directory := strings.TrimSuffix(test.archive, ".zip")
-			if b.Archive != url || b.Command != directory+"/"+test.command || len(b.SHA256) != 64 {
+			if b.Archive != url || b.Command != test.command || len(b.SHA256) != 64 {
 				t.Fatalf("wrong release layout: %+v", b)
 			}
 			release.Assets[0].Digest = ""
@@ -107,6 +107,17 @@ func TestBuiltinReleasePlatformLayouts(t *testing.T) {
 				t.Fatal("accepted an unverified release")
 			}
 		})
+	}
+}
+
+func TestBuiltinDSHRejectsUnpublishedPlatforms(t *testing.T) {
+	var release githubRelease
+	url := "https://github.com/BrokkAi/dsh-acp/releases/download/v1.2.3/dsh-acp-v1.2.3-x86_64-unknown-linux-gnu.tar.gz"
+	if err := json.Unmarshal(releaseMetadata("v1.2.3", "dsh-acp-v1.2.3-x86_64-unknown-linux-gnu.tar.gz", url, strings.Repeat("ab", 32)), &release); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := builtin(t, "dsh-acp").release.binary(release, "linux-aarch64"); err == nil || !strings.Contains(err.Error(), "no asset") {
+		t.Fatalf("accepted a platform without a published asset: %v", err)
 	}
 }
 

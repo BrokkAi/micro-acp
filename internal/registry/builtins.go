@@ -13,7 +13,7 @@ import (
 
 type releaseSource struct {
 	repository, prefix, executable, extension string
-	universalMac                              bool
+	universalMac, rootExecutable              bool
 }
 
 // WithBuiltins supplements the registry with sources for resolving current versions.
@@ -26,6 +26,7 @@ func WithBuiltins(agents []Agent) []Agent {
 	builtins := []Agent{
 		anvil,
 		muse,
+		{ID: "dsh-acp", Name: "DSH ACP", Version: "latest", Description: "BrokkAi/dsh-acp · DeepSeek coding agent · native release · requires DEEPSEEK_API_KEY", release: &releaseSource{repository: "BrokkAi/dsh-acp", prefix: "dsh-acp", executable: "dsh-acp", extension: ".tar.gz", rootExecutable: true}},
 		{ID: "draupnir", Name: "Draupnir", Version: "latest", Description: "foundev/draupnir · portable ACP agent · native release", release: &releaseSource{repository: "foundev/draupnir", prefix: "brokk-draupnir", executable: "draupnir", extension: ".zip", universalMac: true}},
 	}
 	result := append([]Agent(nil), agents...)
@@ -77,7 +78,11 @@ func (s releaseSource) binary(release githubRelease, platform string) (Binary, e
 		if !ok || err != nil || len(decoded) != 32 {
 			return Binary{}, fmt.Errorf("release asset %s has no valid SHA-256 digest", name)
 		}
-		return Binary{Archive: asset.URL, SHA256: digest, Command: directory + "/" + s.executable}, nil
+		command := directory + "/" + s.executable
+		if s.rootExecutable {
+			command = s.executable
+		}
+		return Binary{Archive: asset.URL, SHA256: digest, Command: command}, nil
 	}
 	return Binary{}, fmt.Errorf("%s release %s has no asset for %s", s.repository, release.Tag, platform)
 }

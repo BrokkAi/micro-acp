@@ -38,7 +38,7 @@ func TestAgentsListsBuiltinsOfflineAndHonorsCustomOverrides(t *testing.T) {
 	if err := run(context.Background(), []string{"--offline", "agents"}, &out, &warnings); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"anvil", "muse-acp", "draupnir"} {
+	for _, id := range []string{"anvil", "muse-acp", "dsh-acp", "draupnir"} {
 		count := 0
 		for _, row := range strings.Split(out.String(), "\n") {
 			if fields := strings.Fields(row); len(fields) > 0 && fields[0] == id {
@@ -69,7 +69,7 @@ func TestAgentsAcceptsTrailingFlagsAndPrintsJSON(t *testing.T) {
 	if err := run(context.Background(), []string{"agents", "--offline"}, &text, &warnings); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"anvil", "muse-acp", "draupnir", "local"} {
+	for _, id := range []string{"anvil", "muse-acp", "dsh-acp", "draupnir", "local"} {
 		if !strings.Contains(text.String(), id) {
 			t.Fatalf("trailing flags did not list %s:\n%s", id, text.String())
 		}
@@ -89,7 +89,7 @@ func TestAgentsAcceptsTrailingFlagsAndPrintsJSON(t *testing.T) {
 	for _, row := range rows {
 		seen[row.ID] = true
 	}
-	for _, id := range []string{"anvil", "muse-acp", "draupnir", "local"} {
+	for _, id := range []string{"anvil", "muse-acp", "dsh-acp", "draupnir", "local"} {
 		if !seen[id] {
 			t.Fatalf("agents --json missing %s:\n%s", id, out.String())
 		}

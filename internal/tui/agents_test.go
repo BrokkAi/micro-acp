@@ -23,6 +23,7 @@ func agentCatalogModel(t *testing.T, selected string) *model {
 		RegistryURL: "https://example.test/registry.json",
 		Agents: map[string]config.Command{
 			"muse-acp": {Command: "/custom/muse"},
+			"dsh-acp":  {Command: "/custom/dsh"},
 			"draupnir": {Command: "/custom/draupnir"},
 		},
 	}})

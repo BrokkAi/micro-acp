@@ -116,7 +116,7 @@ func TestCommandsDoNotLaunchWithoutAgent(t *testing.T) {
 
 func TestAgentPickerIncludesBuiltinsAndCustomOverrides(t *testing.T) {
 	m := newModel(context.Background(), Options{Config: config.Config{Agents: map[string]config.Command{"anvil": {Command: "/custom/anvil"}}}})
-	for _, id := range []string{"anvil", "muse-acp", "draupnir"} {
+	for _, id := range []string{"anvil", "muse-acp", "dsh-acp", "draupnir"} {
 		count := 0
 		for _, entry := range m.agents {
 			if entry.id == id {
