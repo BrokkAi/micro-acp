@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/BrokkAi/acp-go/schema"
 	"github.com/BrokkAi/micro-acp/internal/client"
 	"github.com/charmbracelet/x/ansi"
@@ -31,12 +32,12 @@ func TestPromptStopReasonsPauseQueueAndRemainVisible(t *testing.T) {
 				t.Fatal("non-normal stop dispatched the queue, remained busy or became an error")
 			}
 			view := ansi.Strip(m.View().Content)
-			if !strings.Contains(view, test.want) || !strings.Contains(view, "/queue send to continue") {
+			if !strings.Contains(view, test.want) || !strings.Contains(view, "Enter to continue") {
 				t.Fatalf("missing stop reason or queue recovery hint:\n%s", view)
 			}
-			m.sendQueued()
+			m.Update(keyPress(tea.KeyEnter, 0))
 			if m.queuePaused || len(m.queued) != 0 || !m.prompting {
-				t.Fatal("explicit queue resume failed")
+				t.Fatal("Enter did not continue the paused queue")
 			}
 		})
 	}

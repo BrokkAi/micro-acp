@@ -114,6 +114,8 @@ type model struct {
 	queued                     []queuedPrompt
 	queueSequence              uint64
 	queuePaused                bool
+	resumeQueued               bool
+	stopping                   bool
 	steering                   *queuedPrompt
 	editing                    *queuedPrompt
 	savedDraft                 *queuedPrompt
@@ -417,6 +419,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		return m, tea.Batch(action, func() tea.Msg { <-c.Done(); return disconnectedMsg{c} })
 	case disconnectedMsg:
 		if msg.client == m.client {
+			m.stopping, m.resumeQueued = false, false
 			m.lastError = "Agent disconnected. /logs shows details; /reconnect restarts it."
 			m.status = "Disconnected"
 			if m.agentTurn {
@@ -426,6 +429,7 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	case resultMsg:
 		m.busy = false
 		m.prompting = false
+		m.stopping = false
 		if m.steering != nil {
 			m.busy = true
 		}
@@ -462,6 +466,12 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			}
 			if msg.reason != "" && msg.reason != schema.StopReasonEndTurn {
 				m.queuePaused = true
+			}
+		}
+		if m.resumeQueued {
+			m.resumeQueued = false
+			if msg.err == nil && msg.prompt {
+				m.queuePaused = false
 			}
 		}
 		m.syncTranscript()
@@ -580,7 +590,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	k := msg.String()
 	if k == "ctrl+c" {
 		if m.prompting && m.client != nil {
-			m.queuePaused = true
+			m.queuePaused, m.stopping = true, true
 			c := m.client
 			m.status = "Stopping"
 			return func() tea.Msg { _ = c.Cancel(); return nil }
@@ -654,7 +664,7 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 		}
 	case "esc":
 		if m.prompting && m.client != nil {
-			m.queuePaused = true
+			m.queuePaused, m.stopping = true, true
 			c := m.client
 			m.status = "Stopping"
 			return func() tea.Msg { _ = c.Cancel(); return nil }
@@ -711,6 +721,10 @@ func (m *model) key(msg tea.KeyPressMsg) tea.Cmd {
 	case "enter":
 		text := strings.TrimSpace(m.input.Value())
 		if text == "" && len(m.attachments) == 0 && len(m.resources) == 0 {
+			if m.queuePaused && m.editing == nil {
+				m.resumeQueue()
+				return m.dispatchQueue()
+			}
 			return nil
 		}
 		if strings.HasPrefix(text, "/") && m.editing == nil {

@@ -201,7 +201,7 @@ func (m *model) View() tea.View {
 	footer := "/ commands · @ files · Ctrl+O details · Alt+Enter newline"
 	if m.prompting && m.input.Value() != "" {
 		footer = "Enter/Tab queue · Esc stop · Alt+Enter newline"
-		if m.client != nil && m.client.CanSteer() && !m.queuePaused {
+		if m.client != nil && m.client.CanSteer() && !m.stopping {
 			footer = "Enter steer · Tab queue · Esc stop · Alt+Enter newline"
 		}
 	}

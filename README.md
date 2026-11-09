@@ -288,7 +288,7 @@ Form requests support strings, numbers, integers, booleans, single choices, and 
 
 | Key | Action |
 | --- | --- |
-| Enter | Send a prompt; steer the active turn when supported, otherwise queue it. Select a list entry or save an edited queue entry. |
+| Enter | Send a prompt; steer the active turn when supported, otherwise queue it. With an empty prompt, continue a queue held after a stop. Select a list entry or save an edited queue entry. |
 | Alt+Enter / Ctrl+J | Insert a newline. Shift+Enter also works in compatible terminals. |
 | Ctrl+P | Compact command search. |
 | Ctrl+O | Expand full transcript and tool details; press again or Esc to return. |
@@ -309,7 +309,7 @@ Form requests support strings, numbers, integers, booleans, single choices, and 
 
 You can compose while the agent works. **Enter steers** an active turn when the agent advertises steering, including current Codex and Claude ACP adapters. **Tab queues** a separate follow-up, after any visible completion suggestion is handled. Agents without steering support queue Enter submissions too. Pending prompts appear above the composer and run in order after a successful turn.
 
-**Alt+Up** edits the latest queued prompt; `/queue` selects any entry. Editing pauses dispatch, retains the entry's position and attachments, and saves the draft you were typing. Enter saves the edit; Esc restores the original entry. Both return to your previous draft. Use Ctrl+D in `/queue` to remove an entry, `/queue clear` to remove queued work, and `/queue send` to resume after a stop or failure. An unconfirmed steering delivery stays in a paused queue for review instead of being resent automatically. Queues stay tied to their original session and remain in memory; they are not saved across restarts. Multiline paste stays in the draft until you send it.
+**Alt+Up** edits the latest queued prompt; `/queue` selects any entry. Editing pauses dispatch, retains the entry's position and attachments, and saves the draft you were typing. Enter saves the edit; Esc restores the original entry. Both return to your previous draft. Use Ctrl+D in `/queue` to remove an entry and `/queue clear` to remove queued work. After a stop or failure, pending prompts wait instead of starting another turn: press Enter, with or without a new prompt, to continue the queue. An unconfirmed steering delivery stays in a paused queue for review instead of being resent automatically; `/queue send` also continues a paused queue. Queues stay tied to their original session and remain in memory; they are not saved across restarts. Multiline paste stays in the draft until you send it.
 
 Other commands: `/agents`, `/help`, `/info`, `/auth`, `/logout`, `/refresh`, `/quit`. `/info` displays advertised capabilities and configuration. `/logs` shows recent agent stderr and the last error; `/reconnect` restarts the agent and reloads the saved session when supported. `/logout` requires the agent's logout capability.
 

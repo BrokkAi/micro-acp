@@ -50,7 +50,10 @@ func (m *model) submitPrompt(text string, queue bool) tea.Cmd {
 		m.restoreQueueDraft()
 		return m.dispatchQueue()
 	}
-	q.steer = !queue && m.prompting && !m.queuePaused && m.client.CanSteer()
+	if !queue {
+		m.resumeQueue()
+	}
+	q.steer = !queue && m.prompting && !m.queuePaused && !m.stopping && m.client.CanSteer()
 	if m.prompting || m.steering != nil || len(m.queued) > 0 {
 		m.insertQueued(q)
 		return m.dispatchQueue()
@@ -73,8 +76,19 @@ func (m *model) insertQueued(q queuedPrompt) {
 	})
 }
 
+// resumeQueue treats Enter as a request to continue a held queue instead of
+// requiring a command. A stop that has not reported its result yet keeps
+// dispatch blocked until its cancelled turn settles.
+func (m *model) resumeQueue() {
+	if !m.queuePaused {
+		return
+	}
+	m.queuePaused = false
+	m.resumeQueued = m.stopping
+}
+
 func (m *model) dispatchQueue() tea.Cmd {
-	if m.client == nil || m.steering != nil || m.editing != nil || m.queuePaused {
+	if m.client == nil || m.steering != nil || m.editing != nil || m.queuePaused || m.stopping {
 		return nil
 	}
 	if !m.prompting {
@@ -156,10 +170,12 @@ func (m *model) queueView(width int) string {
 	}
 	if len(m.queued) > 0 {
 		header := fmt.Sprintf("%d queued · Alt+↑ edit last · /queue", len(m.queued))
+		headerStyle := m.theme.muted
 		if m.queuePaused {
-			header = fmt.Sprintf("%d queued · /queue send to continue", len(m.queued))
+			header = fmt.Sprintf("%d queued · Enter to continue · /queue", len(m.queued))
+			headerStyle = m.theme.amber
 		}
-		rows = append(rows, m.theme.muted.Render(line(header, width)))
+		rows = append(rows, headerStyle.Render(line(header, width)))
 		limit := min(3, max(1, m.height/8))
 		for i, q := range m.queued[:min(limit, len(m.queued))] {
 			label := strings.Join(strings.Fields(q.text), " ")

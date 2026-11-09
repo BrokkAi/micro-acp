@@ -14,7 +14,7 @@ var commands = []item{
 	{title: "Mode", description: "Choose the agent's operating mode", id: "/mode"},
 	{title: "Reasoning effort", description: "Choose how much the model reasons", id: "/effort"},
 	{title: "Tool details", description: "Expand tools, reasoning and full output · Ctrl+O", id: "/details"},
-	{title: "Queued prompts", description: "Edit or remove prompts · /queue send resumes · /queue clear removes all", id: "/queue"},
+	{title: "Queued prompts", description: "Edit or remove prompts · Enter continues after a stop", id: "/queue"},
 	{title: "Subagents", description: "Child sessions the agent started · open one to read its transcript", id: "/subagents"},
 
 	{title: "New session", description: "Start a fresh conversation", id: "/new"},
@@ -202,7 +202,7 @@ func (m *model) command(text string) tea.Cmd {
 		return nil
 	case "/queue":
 		if arg == "send" {
-			m.queuePaused = false
+			m.resumeQueue()
 			return m.dispatchQueue()
 		}
 		if arg == "clear" {

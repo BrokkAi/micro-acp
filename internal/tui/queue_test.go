@@ -150,6 +150,85 @@ func TestQueueRemoveAndClearKeepDraftAndPendingSteering(t *testing.T) {
 	}
 }
 
+func TestPausedQueueContinuesWithEnter(t *testing.T) {
+	m := queueComposer(t, true)
+	m.submitPrompt("first", true)
+	m.submitPrompt("second", true)
+	m.Update(resultMsg{status: "Ready", reason: schema.StopReasonCancelled, prompt: true})
+	view := ansi.Strip(m.View().Content)
+	if !m.queuePaused || m.prompting || !strings.Contains(view, "Enter to continue") || strings.Contains(view, "/queue send") {
+		t.Fatalf("paused queue does not advertise the key that continues it:\n%s", view)
+	}
+	if cmd := m.key(keyPress(tea.KeyEnter, 0)); cmd == nil || m.queuePaused || !m.prompting || len(m.queued) != 1 || m.queued[0].text != "second" {
+		t.Fatalf("Enter on an empty composer did not continue the queue: %+v", m.queued)
+	}
+}
+
+func TestNewPromptContinuesPausedQueueInOrderButTabDoesNot(t *testing.T) {
+	m := queueComposer(t, false)
+	m.submitPrompt("first", true)
+	m.submitPrompt("second", true)
+	m.Update(resultMsg{status: "Ready", reason: schema.StopReasonMaxTokens, prompt: true})
+	m.input.SetValue("third")
+	if cmd := m.key(keyPress(tea.KeyEnter, 0)); cmd == nil || m.queuePaused || !m.prompting || len(m.queued) != 2 || m.queued[0].text != "second" || m.queued[1].text != "third" {
+		t.Fatalf("a new prompt did not continue the held queue in order: %+v", m.queued)
+	}
+	m.Update(resultMsg{status: "Ready", reason: schema.StopReasonCancelled, prompt: true})
+	m.input.SetValue("fourth")
+	if cmd := m.key(keyPress(tea.KeyTab, 0)); cmd != nil || !m.queuePaused || len(m.queued) != 3 {
+		t.Fatalf("Tab resumed the held queue: %+v", m.queued)
+	}
+}
+
+func TestEnterDuringStopContinuesWhenItSettles(t *testing.T) {
+	m := queueComposer(t, true)
+	m.submitPrompt("queued follow-up", true)
+	m.input.SetValue("new direction")
+	if cmd := m.key(keyPress(tea.KeyEscape, 0)); cmd == nil || !m.stopping || !m.queuePaused {
+		t.Fatal("Esc did not stop the turn and hold the queue")
+	}
+	if cmd := m.key(keyPress(tea.KeyEnter, 0)); cmd != nil || m.steering != nil || m.queuePaused || len(m.queued) != 2 {
+		t.Fatal("Enter started steering or a prompt during a stop")
+	}
+	m.Update(resultMsg{status: "Ready", reason: schema.StopReasonCancelled, prompt: true})
+	if m.stopping || m.queuePaused || !m.prompting || len(m.queued) != 1 || m.queued[0].text != "new direction" {
+		t.Fatalf("the stop result did not continue the queue: %+v", m.queued)
+	}
+}
+
+func TestEnterSteersAgainAfterHeldDelivery(t *testing.T) {
+	m := queueComposer(t, true)
+	m.sendPrompt("Change direction")
+	pending := *m.steering
+	m.steeringResult(steeredMsg{client: m.client, prompt: pending, err: errors.New("delivery unconfirmed")})
+	if !m.queuePaused || len(m.queued) != 1 || !m.prompting {
+		t.Fatal("an unconfirmed delivery did not hold the queue")
+	}
+	m.input.SetValue("Change direction now")
+	if cmd := m.key(keyPress(tea.KeyEnter, 0)); cmd == nil || m.steering == nil || m.steering.text != "Change direction now" || m.queuePaused {
+		t.Fatal("Enter did not steer again after the held delivery")
+	}
+}
+
+func TestEnterDuringStopDoesNotSteerQueuedGuidance(t *testing.T) {
+	m := queueComposer(t, true)
+	m.sendPrompt("first guidance")
+	pending := *m.steering
+	m.sendPrompt("second guidance")
+	if len(m.queued) != 1 || !m.queued[0].steer {
+		t.Fatal("queued guidance was not waiting to steer")
+	}
+	m.key(keyPress(tea.KeyEscape, 0))
+	m.key(keyPress(tea.KeyEnter, 0))
+	if cmd := m.steeringResult(steeredMsg{client: m.client, prompt: pending, outcome: client.SteeringInjected}); cmd != nil || m.steering != nil || len(m.queued) != 1 {
+		t.Fatal("a settling steer sent queued guidance into a stopping turn")
+	}
+	m.Update(resultMsg{status: "Ready", reason: schema.StopReasonCancelled, prompt: true})
+	if m.queuePaused || !m.prompting || len(m.queued) != 0 {
+		t.Fatalf("the stop result did not deliver the queued guidance: %+v", m.queued)
+	}
+}
+
 func TestQueuePreviewAndPendingTranscriptFit(t *testing.T) {
 	m := queueComposer(t, false)
 	for _, text := range []string{"first visible prompt", "second visible prompt", "third", "fourth"} {
