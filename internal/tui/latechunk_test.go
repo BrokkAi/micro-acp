@@ -105,6 +105,27 @@ func (lateOlderToolAgent) Prompt(_ context.Context, c agent.Client, r schema.Pro
 	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 }
 
+// stuckAgent ignores session/cancel while a "hang" prompt works, like an
+// agent blocked in work it cannot interrupt; other prompts answer at once.
+type stuckAgent struct{ lateTestAgent }
+
+func (stuckAgent) Prompt(_ context.Context, _ agent.Client, r schema.PromptRequest, updates agent.SessionUpdater) (schema.PromptResponse, error) {
+	reply := "ready"
+	for _, block := range r.Prompt {
+		if strings.Contains(client.ContentText(block), "hang") {
+			reply = "working"
+		}
+	}
+	chunk := schema.ContentChunk{Content: acp.NewTextContent(reply)}
+	if err := updates.Update(schema.SessionUpdate{AgentMessageChunk: &chunk}); err != nil {
+		return schema.PromptResponse{}, err
+	}
+	if reply == "working" {
+		time.Sleep(time.Hour)
+	}
+	return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
+}
+
 // awaitLateGate holds a late update until the test has checked the turn as
 // committed. A fixed delay raced the test on slow CI runners.
 func awaitLateGate() {
@@ -127,6 +148,8 @@ func TestLateAgentProcess(t *testing.T) {
 		implementation = lateKindAgent{}
 	case "older":
 		implementation = lateOlderToolAgent{}
+	case "stuck":
+		implementation = stuckAgent{}
 	default:
 		return
 	}

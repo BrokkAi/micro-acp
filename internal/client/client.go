@@ -24,6 +24,19 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
 
+// StopGrace is how long Cancel waits for the agent to finish a cancelled turn
+// before disconnecting it, so another prompt cannot overlap the old turn.
+// Winding a turn down (saving state, ending processes, flushing output) can
+// legitimately take a while, so this only catches agents that are stuck.
+// Tests shorten it.
+var StopGrace = 20 * time.Second
+
+// ErrStopTimeout reports a prompt whose agent did not finish the cancelled
+// turn within the stop grace period. The client disconnected the agent; the
+// conversation continues only after reconnecting, which restarts the process
+// and reloads the session when the agent supports it.
+var ErrStopTimeout = errors.New("the agent did not stop in time and was disconnected")
+
 type Permission struct {
 	Request schema.RequestPermissionRequest
 	// Subagent names the child session asking, or is empty for the session itself.
@@ -79,6 +92,7 @@ type Client struct {
 	permissionCtx    context.Context
 	permissionCancel context.CancelFunc
 	cancelRequested  bool
+	stopTimedOut     bool
 	stderr           tail
 }
 
@@ -604,6 +618,7 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	c.permissionCtx = permissions
 	c.permissionCancel = stopPermissions
 	c.cancelRequested = false
+	c.stopTimedOut = false
 	c.turnStart = len(c.current.Messages)
 	c.current.Messages = append(c.current.Messages, store.Message{Role: "user", Text: text, Content: blocks})
 	if c.current.Title == "New session" {
@@ -616,8 +631,10 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	defer func() {
 		cancel()
 		stopPermissions()
-		close(done)
 		c.mu.Lock()
+		// Close under mu so Cancel's grace timer sees either a finished turn
+		// or one it may still disconnect, never a turn between the two.
+		close(done)
 		c.turnCancel = nil
 		c.turnDone = nil
 		c.permissionCtx = nil
@@ -647,7 +664,7 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 		err = errors.Join(err, steerErr)
 	}
 	c.mu.Lock()
-	cancelled := c.cancelRequested
+	cancelled, timedOut := c.cancelRequested, c.stopTimedOut
 	if reason == schema.StopReasonCancelled {
 		c.cancelTurnTools()
 	}
@@ -655,6 +672,12 @@ func (c *Client) PromptContent(blocks []acp.Content) (reason schema.StopReason, 
 	var rpcErr *acp.RPCError
 	if cancelled && errors.As(err, &rpcErr) && rpcErr.Code == -32800 {
 		reason, err = schema.StopReasonCancelled, nil
+	}
+	if timedOut && err != nil {
+		// The grace timer cancelled the request and closed the connection;
+		// whatever error that produced ("context canceled", a closed pipe)
+		// says nothing useful about the stop the user asked for.
+		reason, err = schema.StopReasonCancelled, ErrStopTimeout
 	}
 	if err == nil {
 		c.mu.Lock()
@@ -691,16 +714,51 @@ func (c *Client) Cancel() error {
 	defer cancel()
 	err := c.conn.CancelSession(ctx, id)
 	go func() {
-		timer := time.NewTimer(3 * time.Second)
+		timer := time.NewTimer(StopGrace)
 		defer timer.Stop()
 		select {
 		case <-done:
 		case <-timer.C:
+			c.mu.Lock()
+			finished := c.turnDone != done
+			if !finished {
+				c.stopTimedOut = true
+			}
+			c.mu.Unlock()
+			if finished {
+				return
+			}
 			stop()
 			c.Close()
 		}
 	}()
 	return err
+}
+
+// StopTimedOut reports whether the latest prompt's stop exceeded the grace
+// period, so the client disconnected the agent. It stays set until the next
+// prompt starts.
+func (c *Client) StopTimedOut() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stopTimedOut
+}
+
+// Closed reports whether the agent connection has ended, either because the
+// client closed it or because the agent process exited.
+func (c *Client) Closed() bool {
+	if c.ctx != nil && c.ctx.Err() != nil {
+		return true
+	}
+	if c.conn == nil {
+		return false
+	}
+	select {
+	case <-c.conn.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *Client) Authenticate(method string) error {

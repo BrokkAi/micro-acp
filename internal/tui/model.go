@@ -265,6 +265,31 @@ func (m *model) waitPermission() tea.Cmd {
 		}
 	}
 }
+
+// disconnectedHint is shown whenever the agent process is gone; every prompt
+// fails until it is restarted.
+const disconnectedHint = "Agent disconnected. /logs shows details; /reconnect restarts it."
+
+// reconnect restarts the current agent and reloads the active session when
+// the agent supports loading it.
+func (m *model) reconnect() tea.Cmd {
+	c := m.client
+	if s, _ := c.Snapshot(); s.ID != "" && c.CanLoad() {
+		m.options.Resume = &s
+	}
+	return m.connect(item{title: c.Agent, id: c.Agent, value: c.Invocation()})
+}
+
+// restartAfterStopTimeout replaces an agent that the client disconnected
+// because it did not finish a stopped turn in time. The stop was a request
+// to end the turn, not the conversation, so the session is reloaded and the
+// queue stays held until Enter continues it.
+func (m *model) restartAfterStopTimeout() tea.Cmd {
+	m.queueOutput(m.theme.amber.Render(line("The agent did not stop in time, so micro-acp restarted it and is reloading the session.", m.width-4)) + "\n")
+	m.queuePaused = true
+	return m.reconnect()
+}
+
 func (m *model) connect(selected item) tea.Cmd {
 	if a, ok := selected.value.(registry.Agent); ok && a.NeedsVersionResolution() {
 		if m.catalogLoading && a.VersionError == "" {
@@ -420,10 +445,14 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 	case disconnectedMsg:
 		if msg.client == m.client {
 			m.stopping, m.resumeQueued = false, false
-			m.lastError = "Agent disconnected. /logs shows details; /reconnect restarts it."
+			m.lastError = disconnectedHint
 			m.status = "Disconnected"
 			if m.agentTurn {
 				m.agentTurn, m.busy, m.prompting = false, false, false
+			}
+			// The prompt's own result restarts the agent while it is in flight.
+			if !m.prompting && msg.client.StopTimedOut() {
+				return m, m.restartAfterStopTimeout()
 			}
 		}
 	case resultMsg:
@@ -443,6 +472,11 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 			m.queuePaused = true
 			if acp.IsAuthRequired(msg.err) {
 				m.openAuth()
+			} else if m.client != nil && m.client.Closed() {
+				// A cancelled context or closed pipe from a dead agent hides
+				// the actual problem and the way out of it.
+				m.lastError = disconnectedHint
+				m.status = "Disconnected"
 			}
 		}
 		if msg.err == nil {
@@ -476,6 +510,9 @@ func (m *model) Update(msg tea.Msg) (updated tea.Model, cmd tea.Cmd) {
 		}
 		m.syncTranscript()
 		m.rebuildHistory()
+		if msg.prompt && m.client != nil && m.client.StopTimedOut() {
+			return m, m.restartAfterStopTimeout()
+		}
 		if msg.prompt && msg.err == nil {
 			return m, m.dispatchQueue()
 		}
