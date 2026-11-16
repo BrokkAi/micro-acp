@@ -28,6 +28,11 @@ func (m *model) submitPrompt(text string, queue bool) tea.Cmd {
 		m.lastError = "Wait for the agent connection to finish"
 		return nil
 	}
+	if m.client.Closed() {
+		// Keep the draft: the prompt can be sent once /reconnect finishes.
+		m.lastError = disconnectedHint
+		return nil
+	}
 	s, _ := m.client.Snapshot()
 	if m.editing != nil && m.editing.sessionID != s.ID {
 		m.lastError = "Resume the queued prompt's session before sending it"

@@ -3,6 +3,7 @@ package client_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -130,6 +131,11 @@ func TestAgentProcess(t *testing.T) {
 				return nil, err
 			}
 			_ = conn.Notify(ctx, "session/update", acp.NewAgentMessageChunkUpdate(p.SessionID, schema.ContentChunk{Content: acp.NewTextContent("native reply")}))
+			if mode == "stuck" {
+				// An agent busy with work it cannot interrupt: session/cancel
+				// is ignored and the turn never ends on its own.
+				<-conn.Done()
+			}
 			return schema.PromptResponse{StopReason: schema.StopReasonEndTurn}, nil
 		}
 		return nil, &acp.RPCError{Code: -32601, Message: "not supported"}
@@ -269,11 +275,50 @@ func TestPermissionsCancellationAndNextTurn(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("cancel did not finish")
 	}
+	if c.StopTimedOut() || c.Closed() {
+		t.Fatal("a stop that finished in time disconnected the agent")
+	}
 	_, err := c.Prompt("next turn")
 	require(t, err)
 	s, _ := c.Snapshot()
 	if !strings.Contains(s.Messages[len(s.Messages)-1].Text, "next turn") {
 		t.Fatal("connection did not survive cancellation")
+	}
+}
+
+func TestStopTimeoutReportsTheDisconnectedAgent(t *testing.T) {
+	t.Parallel() // Waits out the real stop grace period.
+	c := openTest(t, "stuck", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
+	require(t, c.New())
+	type result struct {
+		reason schema.StopReason
+		err    error
+	}
+	done := make(chan result, 1)
+	go func() { r, e := c.Prompt("never finishes"); done <- result{r, e} }()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if s, _ := c.Snapshot(); len(s.Messages) >= 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the prompt never reached the agent")
+		}
+	}
+	started := time.Now()
+	require(t, c.Cancel())
+	select {
+	case r := <-done:
+		if r.reason != schema.StopReasonCancelled || !errors.Is(r.err, client.ErrStopTimeout) {
+			t.Fatalf("got %q, %v; want a cancelled turn reporting the stop timeout", r.reason, r.err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the stop grace period did not end the prompt")
+	}
+	if elapsed := time.Since(started); elapsed < 2*time.Second {
+		t.Fatalf("disconnected after %s, before the agent had a chance to stop", elapsed)
+	}
+	if !c.StopTimedOut() || !c.Closed() {
+		t.Fatal("the client did not record the disconnection")
 	}
 }
 

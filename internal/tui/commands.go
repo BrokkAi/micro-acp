@@ -89,10 +89,7 @@ func (m *model) command(text string) tea.Cmd {
 	}
 	switch name {
 	case "/reconnect":
-		if s, _ := c.Snapshot(); s.ID != "" && c.CanLoad() {
-			m.options.Resume = &s
-		}
-		return m.connect(item{title: c.Agent, id: c.Agent, value: c.Invocation()})
+		return m.reconnect()
 	case "/new":
 		m.resumeTarget = nil
 		return m.perform("Creating session…", c.New)
