@@ -287,7 +287,9 @@ func TestPermissionsCancellationAndNextTurn(t *testing.T) {
 }
 
 func TestStopTimeoutReportsTheDisconnectedAgent(t *testing.T) {
-	t.Parallel() // Waits out the real stop grace period.
+	grace := client.StopGrace
+	client.StopGrace = 500 * time.Millisecond
+	t.Cleanup(func() { client.StopGrace = grace })
 	c := openTest(t, "stuck", t.TempDir(), t.TempDir(), store.Store{Directory: t.TempDir()})
 	require(t, c.New())
 	type result struct {
@@ -314,7 +316,7 @@ func TestStopTimeoutReportsTheDisconnectedAgent(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("the stop grace period did not end the prompt")
 	}
-	if elapsed := time.Since(started); elapsed < 2*time.Second {
+	if elapsed := time.Since(started); elapsed < client.StopGrace {
 		t.Fatalf("disconnected after %s, before the agent had a chance to stop", elapsed)
 	}
 	if !c.StopTimedOut() || !c.Closed() {

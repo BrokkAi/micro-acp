@@ -36,7 +36,9 @@ func runUntil[T tea.Msg](cmd tea.Cmd) (T, bool) {
 // period. That used to leave a dead client: the turn and every later prompt
 // failed with "context canceled" until micro-acp was restarted.
 func TestStopTimeoutRestartsTheAgent(t *testing.T) {
-	t.Parallel() // Waits out the real stop grace period.
+	grace := client.StopGrace
+	client.StopGrace = 500 * time.Millisecond
+	t.Cleanup(func() { client.StopGrace = grace })
 	c, _ := openLateAgentClient(t, "stuck")
 	m := composer(t)
 	m.store = store.Store{Directory: t.TempDir()} // The restarted client saves here.

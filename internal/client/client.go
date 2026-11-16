@@ -24,9 +24,12 @@ import (
 	"github.com/BrokkAi/micro-acp/internal/store"
 )
 
-// stopGrace is how long Cancel waits for the agent to finish a cancelled turn
+// StopGrace is how long Cancel waits for the agent to finish a cancelled turn
 // before disconnecting it, so another prompt cannot overlap the old turn.
-const stopGrace = 3 * time.Second
+// Winding a turn down (saving state, ending processes, flushing output) can
+// legitimately take a while, so this only catches agents that are stuck.
+// Tests shorten it.
+var StopGrace = 20 * time.Second
 
 // ErrStopTimeout reports a prompt whose agent did not finish the cancelled
 // turn within the stop grace period. The client disconnected the agent; the
@@ -711,7 +714,7 @@ func (c *Client) Cancel() error {
 	defer cancel()
 	err := c.conn.CancelSession(ctx, id)
 	go func() {
-		timer := time.NewTimer(stopGrace)
+		timer := time.NewTimer(StopGrace)
 		defer timer.Stop()
 		select {
 		case <-done:
